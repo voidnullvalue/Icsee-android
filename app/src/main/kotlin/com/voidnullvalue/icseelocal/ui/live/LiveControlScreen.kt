@@ -97,6 +97,8 @@ fun LiveControlScreen(
     val state by viewModel.connectionState.collectAsState()
     val speed by viewModel.speedStep.collectAsState()
     val talking by viewModel.talking.collectAsState()
+    val talkError by viewModel.talkError.collectAsState()
+    val talkFrames by viewModel.talkFrames.collectAsState()
     val rtspState by viewModel.rtspState.collectAsState()
 
     val context = LocalContext.current
@@ -105,6 +107,11 @@ fun LiveControlScreen(
     }
     val micPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         hasMicPermission = granted
+    }
+    // Ask for mic permission as soon as the screen opens so the first talk press
+    // actually captures instead of only triggering the permission prompt.
+    LaunchedEffect(Unit) {
+        if (!hasMicPermission) micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
     var fullscreen by remember { mutableStateOf(false) }
 
@@ -177,6 +184,27 @@ fun LiveControlScreen(
                     onRelease = viewModel::stopTalk,
                     permissionKey = hasMicPermission,
                 )
+                if (!hasMicPermission) {
+                    Text(
+                        "Microphone permission needed — tap the mic to grant.",
+                        color = MaterialTheme.colorScheme.tertiary,
+                        fontSize = 12.sp,
+                    )
+                }
+                talkError?.let {
+                    Text(
+                        "Talk error: $it",
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp,
+                    )
+                }
+                if (talking) {
+                    Text(
+                        "mic frames sent: $talkFrames",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                }
 
                 // PTZ pad expands to absorb free vertical space and stays centred.
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {

@@ -59,9 +59,10 @@ class TalkController(
      * claim send itself fails -- callers must catch this, since without it a failure here
      * would otherwise look identical to a silently-successful claim.
      */
-    suspend fun start(scope: CoroutineScope, onError: (Throwable) -> Unit = {}) {
+    suspend fun start(scope: CoroutineScope, onError: (Throwable) -> Unit = {}, onFrameSent: (Int) -> Unit = {}) {
         try {
             controlScope = scope
+            var framesSent = 0
             val t = DvripTransport(host, port, sequence = sessionSequence)
             t.connect()
             transport = t
@@ -99,7 +100,10 @@ class TalkController(
             captureJob = microphone.captureAlawChunks()
                 // Audio data frames carry a constant sequence of 0 in the capture,
                 // not the monotonic counter the claim uses.
-                .onEach { alaw -> t.send(sessionId, DvripMessageIds.TALK_AUDIO_UPSTREAM, TalkAudioFrame.wrap(alaw), sequenceOverride = 0u) }
+                .onEach { alaw ->
+                    t.send(sessionId, DvripMessageIds.TALK_AUDIO_UPSTREAM, TalkAudioFrame.wrap(alaw), sequenceOverride = 0u)
+                    onFrameSent(++framesSent)
+                }
                 .catch {
                     Log.e(TAG, "talk audio capture/send failed", it)
                     onError(it)

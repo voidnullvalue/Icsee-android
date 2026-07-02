@@ -67,6 +67,17 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     private val _talking = MutableStateFlow(false)
     val talking: StateFlow<Boolean> = _talking.asStateFlow()
 
+    // Last talk failure, surfaced in the UI so a talk problem is visible instead
+    // of silently doing nothing (null = no error).
+    private val _talkError = MutableStateFlow<String?>(null)
+    val talkError: StateFlow<String?> = _talkError.asStateFlow()
+
+    // Count of mic frames actually captured+sent this talk session. Climbing = the
+    // mic->network path works (so any silence is camera/format); stuck at 0 = capture
+    // itself is failing. Purely diagnostic.
+    private val _talkFrames = MutableStateFlow(0)
+    val talkFrames: StateFlow<Int> = _talkFrames.asStateFlow()
+
     private val _videoStats = MutableStateFlow(VideoStats())
     val videoStats: StateFlow<VideoStats> = _videoStats.asStateFlow()
 
@@ -148,16 +159,31 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
 
     // --- Push to talk ---
     fun startTalk() {
-        val controller = talkController ?: return
+        val controller = talkController
+        if (controller == null) {
+            // Talk needs the authenticated DVRIP session; RTSP video works without it,
+            // so it's possible to see video but have no session for talk.
+            _talkError.value = "Not connected to camera control session yet (state: ${_connectionState.value.label})"
+            return
+        }
+        _talkError.value = null
+        _talkFrames.value = 0
         viewModelScope.launch {
             try {
-                controller.start(viewModelScope, onError = { _talking.value = false })
+                controller.start(
+                    viewModelScope,
+                    onError = { e ->
+                        _talking.value = false
+                        _talkError.value = e.message ?: e.toString()
+                    },
+                    onFrameSent = { _talkFrames.value = it },
+                )
                 _talking.value = true
             } catch (e: Exception) {
                 // Connection/claim-send failure -- TalkController already cleaned itself
-                // up via stop() before rethrowing; just reflect the failure in the UI
-                // rather than letting this crash the app.
+                // up via stop() before rethrowing; surface it instead of crashing.
                 _talking.value = false
+                _talkError.value = e.message ?: e.toString()
             }
         }
     }
