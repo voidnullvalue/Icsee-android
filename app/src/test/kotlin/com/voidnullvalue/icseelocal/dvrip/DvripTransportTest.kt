@@ -3,9 +3,10 @@ package com.voidnullvalue.icseelocal.dvrip
 import app.cash.turbine.test
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlin.time.Duration.Companion.seconds
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -20,7 +21,7 @@ import java.net.ServerSocket
 class DvripTransportTest {
 
     @Test
-    fun `connects, sends a frame, and the server observes the exact bytes`() = runTest {
+    fun `connects, sends a frame, and the server observes the exact bytes`() = runBlocking {
         val server = ServerSocket(0)
         val serverJob = async(Dispatchers.IO) {
             server.soTimeout = 5000
@@ -49,7 +50,7 @@ class DvripTransportTest {
     }
 
     @Test
-    fun `receives and reassembles a frame sent by the server`() = runTest {
+    fun `receives and reassembles a frame sent by the server`() = runBlocking {
         val server = ServerSocket(0)
         val responseFrame = DvripFrame.of(0x1Bu, 1u, DvripMessageIds.LOGIN_RESPONSE, DvripPayloads.encodeJson("""{"Ret":100}"""))
         val serverJob = async(Dispatchers.IO) {
@@ -67,13 +68,17 @@ class DvripTransportTest {
         }
 
         val transport = DvripTransport("127.0.0.1", server.localPort, readPollTimeoutMillis = 200)
-        transport.connect() // starts the transport's own receive loop internally
 
         lateinit var received: DvripFrame
-        withTimeout(5000) {
-            transport.incomingFrames.test {
-                received = awaitItem()
-            }
+        // Real wall-clock timeout (runBlocking, not runTest) so it waits for the
+        // real loopback socket rather than the virtual test clock jumping past it.
+        // Subscribe BEFORE connecting: incomingFrames is a replay=0 SharedFlow, so a
+        // frame emitted before the collector registers would be dropped. connect()
+        // suspends on withContext(IO), which yields and lets Turbine subscribe first,
+        // then the server accepts and sends while we're already collecting.
+        transport.incomingFrames.test(timeout = 5.seconds) {
+            transport.connect() // starts the transport's own receive loop internally
+            received = awaitItem()
         }
 
         serverJob.await()
@@ -85,7 +90,7 @@ class DvripTransportTest {
     }
 
     @Test
-    fun `a shared sequence counter continues across transports and an override forces a literal sequence`() = runTest {
+    fun `a shared sequence counter continues across transports and an override forces a literal sequence`() = runBlocking {
         // Simulates the real DVRIP session model: one monotonic sequence shared
         // by the control connection and any secondary (video/talk) connection
         // that reuses the session. A secondary connection created with the
@@ -146,7 +151,7 @@ class DvripTransportTest {
     }
 
     @Test
-    fun `close is idempotent and safe to call multiple times`() = runTest {
+    fun `close is idempotent and safe to call multiple times`() = runBlocking {
         val server = ServerSocket(0)
         val acceptJob = async(Dispatchers.IO) { server.accept() }
         val transport = DvripTransport("127.0.0.1", server.localPort)
@@ -161,7 +166,7 @@ class DvripTransportTest {
     }
 
     @Test
-    fun `connect throws on refused connection within the timeout`() = runTest {
+    fun `connect throws on refused connection within the timeout`() = runBlocking {
         val server = ServerSocket(0)
         val port = server.localPort
         server.close() // nothing listening now
@@ -177,7 +182,7 @@ class DvripTransportTest {
     }
 
     @Test
-    fun `second connect on an already-connected transport is rejected`() = runTest {
+    fun `second connect on an already-connected transport is rejected`() = runBlocking {
         val server = ServerSocket(0)
         val acceptJob = async(Dispatchers.IO) { server.accept() }
         val transport = DvripTransport("127.0.0.1", server.localPort)
