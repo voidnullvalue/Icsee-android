@@ -18,7 +18,7 @@ sealed class BlePairingUiState {
     data object Idle : BlePairingUiState()
     data object Pairing : BlePairingUiState()
     data class Success(val camera: BlePairedCamera) : BlePairingUiState()
-    data class Failed(val errorCode: Int) : BlePairingUiState()
+    data class Failed(val errorCode: Int, val detail: String? = null) : BlePairingUiState()
 }
 
 class BlePairingViewModel(application: Application) : AndroidViewModel(application) {
@@ -28,6 +28,9 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
     private val _beacons = MutableStateFlow<List<BleCameraBeacon>>(emptyList())
     val beacons: StateFlow<List<BleCameraBeacon>> = _beacons.asStateFlow()
 
+    private val _scanError = MutableStateFlow<String?>(null)
+    val scanError: StateFlow<String?> = _scanError.asStateFlow()
+
     private val _pairingState = MutableStateFlow<BlePairingUiState>(BlePairingUiState.Idle)
     val pairingState: StateFlow<BlePairingUiState> = _pairingState.asStateFlow()
 
@@ -36,6 +39,7 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
     fun startScan() {
         scanJob?.cancel()
         _beacons.value = emptyList()
+        _scanError.value = null
         val seen = linkedMapOf<String, BleCameraBeacon>()
         scanJob = viewModelScope.launch {
             runCatching {
@@ -43,7 +47,7 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
                     seen[beacon.address] = beacon
                     _beacons.value = seen.values.toList()
                 }
-            }
+            }.onFailure { _scanError.value = it.message ?: "BLE scan failed" }
         }
     }
 
@@ -63,7 +67,7 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
                     )
                 }
                 is BleWifiProvisionCodec.WifiConfigAck.Failure -> {
-                    _pairingState.value = BlePairingUiState.Failed(ack.errorCode)
+                    _pairingState.value = BlePairingUiState.Failed(ack.errorCode, ack.detail)
                 }
             }
         }

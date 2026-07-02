@@ -40,6 +40,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.voidnullvalue.icseelocal.ble.BleCameraBeacon
 import com.voidnullvalue.icseelocal.ble.BlePairedCamera
+import com.voidnullvalue.icseelocal.ble.CameraBlePairingClient
 
 private val requiredBlePermissions: Array<String> =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -64,6 +65,7 @@ fun BlePairingScreen(
     }
 
     val beacons by viewModel.beacons.collectAsState()
+    val scanError by viewModel.scanError.collectAsState()
     val pairingState by viewModel.pairingState.collectAsState()
     var selectedAddress by remember { mutableStateOf<String?>(null) }
     var ssid by remember { mutableStateOf("") }
@@ -87,7 +89,12 @@ fun BlePairingScreen(
                                 BeaconRow(beacon, selected = beacon.address == selectedAddress, onClick = { selectedAddress = beacon.address })
                             }
                             if (beacons.isEmpty()) {
-                                Text("No cameras found yet -- make sure it's powered on and in pairing mode.", style = MaterialTheme.typography.bodySmall)
+                                val err = scanError
+                                if (err != null) {
+                                    Text("Scan error: $err", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                } else {
+                                    Text("No cameras found yet -- make sure it's powered on and in pairing mode.", style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                         }
                         OutlinedTextField(
@@ -121,13 +128,53 @@ fun BlePairingScreen(
                 }
                 is BlePairingUiState.Success -> {
                     Text("Paired!", style = MaterialTheme.typography.titleMedium)
-                    Text("Camera joined the network at ${state.camera.host}")
+                    Text("Camera joined the network at ${state.camera.host}", modifier = Modifier.padding(top = 4.dp))
+                    // Credentials the camera reported back in its provisioning ACK -- these
+                    // are what you log in with (username defaults to admin if the camera
+                    // didn't assign one). Surface them so they aren't lost.
+                    Text(
+                        "Login: ${state.camera.username} / ${state.camera.password.ifBlank { "(no password)" }}",
+                        modifier = Modifier.padding(top = 8.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    state.camera.mac?.let {
+                        Text("MAC: $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                    }
                     Button(onClick = { onPaired(state.camera) }, modifier = Modifier.padding(top = 16.dp)) {
                         Text("Continue to camera settings")
                     }
                 }
                 is BlePairingUiState.Failed -> {
-                    Text("Pairing failed (code ${state.errorCode}). Make sure the camera is in pairing mode and try again.", style = MaterialTheme.typography.titleMedium)
+                    if (state.errorCode == CameraBlePairingClient.ERROR_PROVISIONED_NO_ACK) {
+                        // Not a real failure: the credentials were sent and the camera is
+                        // joining WiFi; it just didn't report back over Bluetooth.
+                        Text("Credentials sent", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "The camera is joining your WiFi. It didn't report its details back " +
+                                "over Bluetooth, so use its factory login below once it's on the network:",
+                            modifier = Modifier.padding(top = 8.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            "Login: admin / (no password)",
+                            modifier = Modifier.padding(top = 8.dp),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            "You can set a password afterwards in camera settings.",
+                            modifier = Modifier.padding(top = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        val errorMessage = when (state.errorCode) {
+                            CameraBlePairingClient.ERROR_BLUETOOTH_DISABLED -> "Bluetooth is disabled. Please enable Bluetooth and try again."
+                            else -> "Pairing failed (code ${state.errorCode}). Make sure the camera is in pairing mode and try again."
+                        }
+                        Text(errorMessage, style = MaterialTheme.typography.titleMedium)
+                    }
+                    state.detail?.let {
+                        Text(it, modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
                         Button(onClick = { viewModel.reset(); viewModel.startScan() }, modifier = Modifier.padding(end = 8.dp)) { Text("Retry") }
                         Button(onClick = onCancel) { Text("Cancel") }

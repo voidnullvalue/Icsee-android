@@ -126,7 +126,7 @@ object BleWifiProvisionCodec {
             val mac: String,
             val devToken: String?,
         ) : WifiConfigAck()
-        data class Failure(val errorCode: Int) : WifiConfigAck()
+        data class Failure(val errorCode: Int, val detail: String? = null) : WifiConfigAck()
     }
 
     /** Mirrors `XMBleManager.parseBleWiFiConfigResult`'s offset walk exactly, translated from hex-string to byte-array indexing. */
