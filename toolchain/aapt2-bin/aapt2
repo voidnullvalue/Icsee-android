@@ -1,0 +1,7 @@
+#!/bin/bash
+# Runs the official x86_64 aapt2 binary (published by Google for AGP 9.2.1,
+# no native linux-aarch64 build exists) under QEMU user-mode emulation.
+# See BUILDING_IN_PROOT.md for the full rationale.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export QEMU_LD_PREFIX=/usr/lib/x86_64-linux-gnu
+exec qemu-x86_64-static "$SCRIPT_DIR/aapt2-x86_64" "$@"

@@ -1,0 +1,8 @@
+# Copy this file to local-test.properties (already gitignored) to run
+# opt-in live hardware tests against a real camera. Never commit real
+# credentials -- environment variables of the same names take precedence
+# over this file, see app/build.gradle.kts.
+ICSEE_TEST_HOST=192.168.1.100
+ICSEE_TEST_PORT=34567
+ICSEE_TEST_USERNAME=
+ICSEE_TEST_PASSWORD=

@@ -1,0 +1,26 @@
+# Build outputs
+*.iml
+.gradle/
+build/
+/captures
+.externalNativeBuild/
+.cxx/
+local.properties
+local-test.properties
+
+# Original packet capture evidence - never commit
+/pcap.pcap
+evidence/pcap.pcap
+
+# Derived pcap dumps still contain real (if encrypted) session traffic from
+# the target camera; keep locally for analysis but do not commit.
+tools/pcap/*.followraw.txt
+tools/pcap/*.jsonl
+
+# IDE
+.idea/
+*.hprof
+
+# OS
+.DS_Store
+__pycache__/
