@@ -67,19 +67,24 @@ class CameraBlePairingClient(private val context: Context) {
 
         fun handleNotify(value: ByteArray) {
             notifyBuffer.write(value)
-            val buffered = notifyBuffer.toByteArray()
-            val expected = BleWifiProvisionCodec.expectedFrameLength(buffered) ?: return
-            if (buffered.size < expected) return
-            val frame = BleWifiProvisionCodec.parseFrame(buffered)
-            if (frame == null) {
-                if (!ackResult.isCompleted) ackResult.completeExceptionally(IllegalStateException("ack frame checksum/shape mismatch"))
-                return
-            }
-            val ack = BleWifiProvisionCodec.parseWifiConfigAck(frame.content)
-            if (ack != null) {
-                if (!ackResult.isCompleted) ackResult.complete(ack)
-            } else if (!ackResult.isCompleted) {
-                ackResult.completeExceptionally(IllegalStateException("unparseable ack content"))
+            // Drain every complete frame currently buffered. The camera sends a
+            // CMD_RECEIVE receipt (cmdId=2, typically a non-zero "connecting" status)
+            // BEFORE the CMD_CALLBACK result (cmdId=3) that carries the final success
+            // and assigned credentials. Only the callback is the real result -- mirror
+            // the vendor, which acts solely on getCmdId()==3. Completing on the receipt
+            // was what surfaced a bogus "failed (code 1)" even though the camera joined.
+            while (true) {
+                val buffered = notifyBuffer.toByteArray()
+                val expected = BleWifiProvisionCodec.expectedFrameLength(buffered) ?: return
+                if (buffered.size < expected) return
+                val frameBytes = buffered.copyOfRange(0, expected)
+                notifyBuffer.reset()
+                if (buffered.size > expected) notifyBuffer.write(buffered, expected, buffered.size - expected)
+
+                val frame = BleWifiProvisionCodec.parseFrame(frameBytes) ?: continue
+                if (frame.cmdId != BleWifiProvisionCodec.CMD_CALLBACK) continue // receipt/progress, keep waiting
+                val ack = BleWifiProvisionCodec.parseWifiConfigAck(frame.content)
+                if (ack != null && !ackResult.isCompleted) ackResult.complete(ack)
             }
         }
 

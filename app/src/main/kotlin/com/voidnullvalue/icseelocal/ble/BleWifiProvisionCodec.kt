@@ -32,6 +32,14 @@ object BleWifiProvisionCodec {
     private const val WIFI_CONFIG_FUN_ID: Int = 0x0002
     private const val DATA_TYPE: Int = 0x00
 
+    // Frame roles (XMBleHead cmdId). Our request is CMD_SEND. The camera replies
+    // with a CMD_RECEIVE receipt (acknowledges it got the config, often a non-zero
+    // "connecting" status) FIRST, then the CMD_CALLBACK result carrying the final
+    // success + assigned credentials. Only the callback is the real result -- the
+    // vendor's AddDeviceByBlueToothActivity acts solely on getCmdId()==3.
+    const val CMD_RECEIVE: Int = 0x02
+    const val CMD_CALLBACK: Int = 0x03
+
     /** Builds the exact bytes to chunk-write to the write characteristic (2b11). */
     fun buildWifiConfigFrame(ssid: String, password: String, encryptType: Int): ByteArray {
         val content = buildContent(ssid, password, encryptType)

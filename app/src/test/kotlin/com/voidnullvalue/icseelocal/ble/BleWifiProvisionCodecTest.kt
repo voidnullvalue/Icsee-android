@@ -104,4 +104,23 @@ class BleWifiProvisionCodecTest {
         assertTrue(ack is BleWifiProvisionCodec.WifiConfigAck.Failure)
         assertEquals(0x53, (ack as BleWifiProvisionCodec.WifiConfigAck.Failure).errorCode)
     }
+
+    @Test
+    fun `camera reply frame roles distinguish receipt from callback`() {
+        assertEquals(0x02, BleWifiProvisionCodec.CMD_RECEIVE)
+        assertEquals(0x03, BleWifiProvisionCodec.CMD_CALLBACK)
+        // A CMD_RECEIVE receipt (cmdId=2) carrying a non-zero "connecting" status.
+        // The pairing client must recognize this as a receipt and keep waiting for the
+        // CMD_CALLBACK, rather than reporting the receipt's status as a failure (the
+        // bug that surfaced "pairing failed (code 1)" while the camera actually joined).
+        val receipt = BleWifiProvisionCodec.parseFrame(hexToBytes("8B8B02020002000001011E"))
+        assertNotNull(receipt)
+        assertEquals(BleWifiProvisionCodec.CMD_RECEIVE, receipt!!.cmdId)
+        // The success frame is a CMD_CALLBACK (cmdId=3) -- the only frame we act on.
+        val callback = BleWifiProvisionCodec.parseFrame(
+            hexToBytes("8B8B02030002000025000561646D696E085A78394B326D5071034944310104A8C000112233445506746F6B31323325"),
+        )
+        assertNotNull(callback)
+        assertEquals(BleWifiProvisionCodec.CMD_CALLBACK, callback!!.cmdId)
+    }
 }
