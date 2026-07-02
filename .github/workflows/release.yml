@@ -37,10 +37,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build debug APK
+      - name: Build release APK
         # Tests are skipped here so a release is never blocked by the known-flaky
         # DvripTransport timing test; correctness tests run in the CI workflow.
-        run: ./gradlew assembleDebug -x test
+        run: ./gradlew assembleRelease -x test
 
       - name: Name the artifact
         id: name
@@ -52,7 +52,7 @@ jobs:
             VERSION="dev-${VERSION:0:7}"
           fi
           OUT="icsee-camera-${VERSION}.apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "$OUT"
+          cp app/build/outputs/apk/release/app-release.apk "$OUT"
           echo "apk=$OUT" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifact
@@ -68,11 +68,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           printf '%s\n' \
-            'Debug-signed APK built by CI. Install directly on an Android device' \
+            'Release build (assembleRelease). Install directly on an Android device' \
             '(enable "install unknown apps" for your file manager or browser).' \
             '' \
-            'Signed with the standard Android debug key, not a release key. To' \
-            'publish a release-signed build, add a keystore and signing config.' \
+            'Signed with the standard Android debug key so it is sideload-installable;' \
+            'swap in a real keystore/signing config to publish through a store.' \
             > release-notes.md
           gh release create "${{ github.ref_name }}" \
             "${{ steps.name.outputs.apk }}" \
