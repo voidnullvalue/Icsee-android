@@ -130,13 +130,24 @@ fun CameraSettingsScreen(
                 )
             }
 
+            Text(
+                "Default credentials: admin / admin",
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp, top = 4.dp),
+                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
             Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 Button(onClick = viewModel::testConnection, enabled = !state.testing && state.host.isNotBlank()) {
                     if (state.testing) CircularProgressIndicator(Modifier.padding(end = 8.dp))
-                    Text("Test connection")
+                    Text(if (state.testing) "Testing..." else "Test connection")
                 }
             }
-            state.testResult?.let { Text(it, modifier = Modifier.padding(bottom = 8.dp)) }
+            state.testResult?.let {
+                Text(it, modifier = Modifier.padding(bottom = 8.dp, top = 4.dp),
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall
+                )
+            }
 
             Row(Modifier.fillMaxWidth()) {
                 Button(onClick = { viewModel.save(onDone) }, modifier = Modifier.padding(end = 8.dp)) { Text("Save") }

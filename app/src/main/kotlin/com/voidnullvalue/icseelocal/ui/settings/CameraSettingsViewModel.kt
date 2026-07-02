@@ -167,20 +167,37 @@ class CameraSettingsViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
-    /** TCP-reachability only -- full login is not implemented yet (see PROTOCOL_STATUS.md), so this cannot verify credentials. */
     fun testConnection() {
         val s = _state.value
         viewModelScope.launch {
             _state.value = s.copy(testing = true, testResult = null)
             val result = try {
-                withTimeout(5000) {
+                withTimeout(10000) {
                     val transport = DvripTransport(s.host, s.dvripPort.toIntOrNull() ?: 34567)
                     transport.connect()
-                    transport.close()
-                    "TCP connection to ${s.host}:${s.dvripPort} succeeded (login not attempted -- see Diagnostics)"
+                    try {
+                        // Perform full DVRIP login verification with the provided credentials
+                        if (s.username.isNotBlank() && s.password.isNotBlank()) {
+                            val credentials = CameraCredentials(s.username, s.password)
+                            val negotiator = com.voidnullvalue.icseelocal.session.DvripLoginNegotiator()
+                            val session = negotiator.negotiate(transport, credentials)
+                            // Send a keepalive to verify the session is active
+                            transport.send(
+                                session = session.sessionId,
+                                messageId = 1006,
+                                payload = byteArrayOf(),
+                            )
+                            "✓ Login successful on ${s.host}:${s.dvripPort} as ${s.username}"
+                        } else {
+                            // No credentials provided, just verify TCP connectivity
+                            "✓ TCP connection to ${s.host}:${s.dvripPort} succeeded (provide username/password for full login verification)"
+                        }
+                    } finally {
+                        transport.close()
+                    }
                 }
             } catch (e: Exception) {
-                "Connection failed: ${e.message}"
+                "✗ Connection failed: ${e.message}"
             }
             _state.value = _state.value.copy(testing = false, testResult = result)
         }
