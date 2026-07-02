@@ -1,0 +1,81 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"          # push a tag like v1.0.0 to cut a release
+  workflow_dispatch:  # or run manually to just get a build artifact
+
+permissions:
+  contents: write     # needed to create the GitHub Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The committed gradle.properties pins aapt2 to a local ARM/proot toolchain
+      # path (see BUILDING_IN_PROOT.md) that does not exist on CI. Drop it so the
+      # standard Maven-distributed aapt2 is used on the x86_64 runner.
+      - name: Neutralize proot-only aapt2 override
+        run: sed -i '/android.aapt2FromMavenOverride/d' gradle.properties
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        # Tests are skipped here so a release is never blocked by the known-flaky
+        # DvripTransport timing test; correctness tests run in the CI workflow.
+        run: ./gradlew assembleDebug -x test
+
+      - name: Name the artifact
+        id: name
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+            VERSION="dev-${VERSION:0:7}"
+          fi
+          OUT="icsee-camera-${VERSION}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$OUT"
+          echo "apk=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.apk }}
+          path: ${{ steps.name.outputs.apk }}
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s\n' \
+            'Debug-signed APK built by CI. Install directly on an Android device' \
+            '(enable "install unknown apps" for your file manager or browser).' \
+            '' \
+            'Signed with the standard Android debug key, not a release key. To' \
+            'publish a release-signed build, add a keystore and signing config.' \
+            > release-notes.md
+          gh release create "${{ github.ref_name }}" \
+            "${{ steps.name.outputs.apk }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file release-notes.md \
+            --generate-notes
