@@ -25,6 +25,12 @@ target camera:
   `Ret: 100` but leaves the speaker closed; a plaintext OPTalk **`Start`**
   (1430) on the control connection is what actually opens it, after which
   streamed G.711 A-law frames play out loud.
+- **BLE pairing / Wi-Fi provisioning** — **works on real hardware**: the app
+  scans for the camera in pairing mode, connects, sends the Wi-Fi credentials
+  over BLE, and the **camera joins the router**. The camera drops BLE as it
+  joins Wi-Fi (before reporting its own credentials back), so the app shows the
+  factory login (`admin`, no password); add the camera by IP afterwards. See
+  the BLE rows in `PROTOCOL_STATUS.md`.
 
 ## Features
 
