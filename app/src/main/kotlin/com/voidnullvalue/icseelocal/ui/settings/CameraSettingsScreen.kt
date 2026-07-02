@@ -34,8 +34,15 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import com.voidnullvalue.icseelocal.ble.BlePairedCamera
 import com.voidnullvalue.icseelocal.discovery.DiscoveryBeacon
+import com.voidnullvalue.icseelocal.model.StreamType
+import com.voidnullvalue.icseelocal.video.RtspUrlBuilder
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,6 +135,44 @@ fun CameraSettingsScreen(
                     label = { Text("RTSP port") },
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                 )
+            }
+
+            if (state.host.isNotBlank()) {
+                // Convenience: the exact RTSP URL this app plays, so it can be pasted
+                // into VLC/ffmpeg/another NVR. Channel is descriptor 0-based + 1 (the
+                // camera's RTSP path is 1-based); stream 0 = main, 1 = sub. Mirrors
+                // RtspVideoPlayer.start(). Username falls back to the factory "admin".
+                val clipboard = LocalClipboardManager.current
+                val rtspUrl = remember(state.host, state.rtspPort, state.username, state.password, state.channel, state.streamType) {
+                    RtspUrlBuilder.build(
+                        host = state.host,
+                        port = state.rtspPort.toIntOrNull() ?: 554,
+                        username = state.username.ifBlank { RtspUrlBuilder.FALLBACK_USERNAME },
+                        password = state.password,
+                        channel = (state.channel.toIntOrNull() ?: 0) + 1,
+                        mainStream = state.streamType == StreamType.MAIN,
+                    )
+                }
+                var copied by remember { mutableStateOf(false) }
+                LaunchedEffect(copied) { if (copied) { kotlinx.coroutines.delay(1500); copied = false } }
+
+                Text(
+                    "RTSP stream URL",
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                SelectionContainer {
+                    Text(
+                        rtspUrl,
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    )
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp)) {
+                    Button(onClick = { clipboard.setText(AnnotatedString(rtspUrl)); copied = true }) {
+                        Text(if (copied) "Copied!" else "Copy URL")
+                    }
+                }
             }
 
             Text(
