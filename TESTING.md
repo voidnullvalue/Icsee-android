@@ -135,6 +135,13 @@ implements) and the reference capture.
     (1434) alone is silent; a plaintext `OPTalk` `Start` (1430) on the control
     connection opens the speaker, after which streamed G.711 A-law frames play
     out loud. A streamed test tone was heard from the camera.
+16. BLE Wi-Fi provisioning -- **confirmed on real hardware (OnePlus HD1901,
+    2026-07-02): the camera scans, connects, receives the credential frame and
+    joins the router.** The camera drops BLE when it joins Wi-Fi, so the
+    assigned-credentials ACK is not observed; the app reports the factory login
+    (`admin` / no password) and the camera is then added by IP via LAN
+    discovery. See PROTOCOL_NOTES.md "BLE Wi-Fi provisioning -- hardware
+    findings" and the BLE rows in PROTOCOL_STATUS.md.
 
 ### RTSP video probe (2026-07-01)
 

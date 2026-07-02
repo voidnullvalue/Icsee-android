@@ -471,3 +471,69 @@ real test fixtures instead of invented ones:
 ```
 
 Message 1010 (pre-login negotiate) is not among them — see "Login" above.
+
+## BLE Wi-Fi provisioning — hardware findings (not from the pcap)
+
+BLE pairing is **not** in `/root/pcap.pcap` (that capture is raw IP / Wi-Fi
+only). This section is sourced from the decompiled factory app
+(`XMBleManager`, `BluetoothClientImpl`, and the bundled inuker
+`BleConnectRequest`/`BleConnectWorker`) cross-checked against live testing on a
+real camera + a OnePlus HD1901 phone on 2026-07-02. It backs the
+`[[project-icsee-ble-pairing]]` memory and the comments in
+`ble/CameraBlePairingClient.kt` / `ble/CameraBleScanner.kt`.
+
+**GATT UUIDs** (read from the vendor app, not guessed):
+
+```
+service  00001910-0000-1000-8000-00805f9b34fb
+write    00002b11-0000-1000-8000-00805f9b34fb   (client -> camera, write-with-response)
+notify   00002b10-0000-1000-8000-00805f9b34fb   (camera -> client, ACK)
+cccd     00002902-0000-1000-8000-00805f9b34fb   (standard notify descriptor)
+```
+
+**Scanning.** The camera does **not** advertise the pairing service UUID —
+that service only exists after you connect. The vendor's `SearchRequest` sets
+no scan filter at all and identifies cameras purely in software from their
+**manufacturer-specific data** (AD type 0xFF), keeping those whose hex payload
+starts with `8B8B`, `8B8D`, or `8BB8` (`XMBleManager.n()`). Our
+`CameraBleScanner` does the same; the earlier service-UUID scan filter matched
+nothing on real hardware.
+
+**Connect choreography.** The vendor connects through the inuker library, whose
+`BleConnectRequest` state machine does three things a naive raw `connectGatt`
+does not, and all three were needed to make discovery reliable on the
+OnePlus/Qualcomm stack:
+
+1. Waits **300ms** after `STATE_CONNECTED` before `discoverServices()`
+   (`onConnectStatusChanged` → `sendEmptyMessageDelayed(2, 300L)`). Skipping it
+   makes discovery return SUCCESS with an empty/partial service table, so
+   `getService()` yields null.
+2. On empty/failed discovery, calls `BluetoothGatt.refresh()` (hidden method,
+   via reflection — `BluetoothUtils.refreshGattCache`) to clear Android's stale
+   GATT cache, then retries up to 4× (1s apart).
+3. Retries the whole connect up to 4×.
+
+The vendor also always uses the static `BluetoothAdapter.getDefaultAdapter()`,
+never `BluetoothManager.getAdapter()` (which can transiently return null during
+BT state transitions). Our client mirrors all of this.
+
+**Writing the credential frame.** `BleWifiProvisionCodec` builds the frame that
+`BleDistributionUtil.combineWiFiSSIDToHexStr(ssid, password, encrypt, …)`
+produces (byte-verified by unit test). The vendor writes it in chunks (default
+512B) **paced ~50ms apart** (`XMBleManager.l()` with `Thread.sleep(50)`) using
+write-with-response, and — critically — determines success from the **ACK
+notification, never from the write callback**. On the OnePlus stack
+`onCharacteristicWrite` is not reliably delivered even though the write
+physically lands (the camera joins the router), so our client no longer
+hard-fails on a missing write callback.
+
+**The ACK, and why we usually don't get it.** After joining Wi-Fi the camera
+**drops the BLE link**, typically before (or instead of) sending the ACK
+notification. The ACK, when present, carries the device's assigned
+username/password, IP, MAC, and token; `parseWifiConfigAck` mirrors the
+vendor's `parseBleWiFiConfigResult` offset walk. Because we rarely observe it,
+provisioning is treated as succeeded once the frame is sent (the camera is
+demonstrably on the network), and the app reports the **factory-default login
+`admin` / no password** — which is what a fresh or reset device uses — then
+relies on normal LAN discovery to find the camera by IP. Reading the real
+assigned credentials from a live ACK remains unconfirmed.

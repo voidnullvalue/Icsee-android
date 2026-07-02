@@ -36,7 +36,7 @@ target camera:
 - PTZ: 8-direction press-and-hold pad with stop-on-release, adjustable speed
 - Live video: RTSP (H.265 + PCMA), rendered via `androidx.media3` / `PlayerView`, tap-to-fullscreen
 - Push-to-talk: separate talk connection, OPTalk Claim + Start handshake, G.711 A-law upstream audio
-- BLE pairing / Wi-Fi provisioning research path (unit-tested codec)
+- BLE pairing / Wi-Fi provisioning — **provisioning verified on real hardware** (camera joins Wi-Fi); scanner and GATT choreography matched to the factory app
 - Dark, touch-first Jetpack Compose UI
 - Sanitized protocol diagnostics screen (no credentials/keys ever shown)
 
@@ -69,7 +69,7 @@ app/src/main/kotlin/com/voidnullvalue/icseelocal/
   ptz/          OPPTZControl JSON builder, press-and-hold controller
   video/        RTSP player, media stream reassembly, codec probe, snapshot capture
   audio/        G.711 A-law codec, talk frame wrapping, microphone capture, talk controller
-  ble/          BLE Wi-Fi provisioning codec
+  ble/          BLE scanner (manufacturer-data beacon match), pairing/Wi-Fi provisioning client + codec
   storage/      Keystore-backed credential storage, DataStore for non-sensitive prefs
 ```
 
