@@ -76,7 +76,7 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                 manager.state.collect { connState ->
                     _state.value = _state.value.copy(connectionState = connState)
                     if (connState is ConnectionState.Authenticated) {
-                        configChannel = DvripConfigChannel(manager.controlTransport!!, manager.commandChannel!!, connState.sessionId)
+                        configChannel = DvripConfigChannel(manager.controlTransport!!, manager.commandChannel!!, connState.sessionId, getApplication())
                         refreshAll()
                     }
                 }
@@ -276,6 +276,8 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
     fun clearStatus() {
         _state.value = _state.value.copy(statusMessage = null, errorMessage = null)
     }
+
+    suspend fun getConfigMetadata(configName: String) = configChannel?.getCachedMetadata(configName)
 
     override fun onCleared() {
         sessionManager?.shutdown()

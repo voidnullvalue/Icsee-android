@@ -13,12 +13,16 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.voidnullvalue.icseelocal.config.ConfigMetadataCache
 
 /**
  * Generic editor for one named DVRIP config (Camera.Param, Detect.MotionDetect,
@@ -41,6 +45,11 @@ fun ConfigEditorScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val value = state.configValues[configName]
+    var metadata by remember { mutableStateOf<ConfigMetadataCache?>(null) }
+
+    LaunchedEffect(configName) {
+        metadata = viewModel.getConfigMetadata(configName)
+    }
 
     Scaffold(topBar = { TopAppBar(title = { Text(label) }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
@@ -48,7 +57,7 @@ fun ConfigEditorScreen(
                 Text("Not available on this camera.")
             } else {
                 val editable = remember(configName) { EditableJson.from(value) }
-                JsonEditorNode(name = label, node = editable)
+                JsonEditorNode(name = label, node = editable, metadata = metadata)
                 if (state.busy) CircularProgressIndicator(Modifier.padding(top = 16.dp))
                 state.errorMessage?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)) }
                 state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp)) }

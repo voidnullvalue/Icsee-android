@@ -1,5 +1,6 @@
 package com.voidnullvalue.icseelocal.config
 
+import android.content.Context
 import com.voidnullvalue.icseelocal.dvrip.DvripMessageIds
 import com.voidnullvalue.icseelocal.dvrip.DvripTransport
 import com.voidnullvalue.icseelocal.session.DvripCommandChannel
@@ -53,9 +54,11 @@ class DvripConfigChannel(
     private val transport: DvripTransport,
     private val commandChannel: DvripCommandChannel,
     private val sessionId: UInt,
+    private val context: Context? = null,
     private val responseTimeoutMillis: Long = 5000,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val metadataStore = context?.let { ConfigMetadataStore(it) }
 
     private fun sessionIdHex(): String = "0x%08x".format(sessionId.toLong())
 
@@ -87,6 +90,12 @@ class DvripConfigChannel(
         val ret = (obj["Ret"] as? JsonPrimitive)?.content?.toIntOrNull()
         val value = obj[name]
         return if (ret == 100 && value != null) {
+            // Analyze and cache metadata for this config
+            try {
+                metadataStore?.put(ConfigMetadataCache(name, ConfigMetadataAnalyzer.analyze(name, value)))
+            } catch (e: Exception) {
+                // Metadata caching failures are non-fatal
+            }
             ConfigResult.Success(name, value)
         } else {
             ConfigResult.Failure(name, ret, text)
@@ -114,6 +123,10 @@ class DvripConfigChannel(
     /** Read-only capability queries: `EncodeCapability`, `SupportExtRecord`, `FishEyePlatform`. */
     suspend fun getAbility(name: String): ConfigResult =
         request(DvripMessageIds.ABILITY_GET, DvripMessageIds.ABILITY_GET_RESPONSE, name, JsonObject(emptyMap()))
+
+    /** Retrieve cached metadata for a config name (inferred from previous fetches). */
+    suspend fun getCachedMetadata(name: String): ConfigMetadataCache? =
+        metadataStore?.get(name)
 }
 
 sealed class ConfigResult {
