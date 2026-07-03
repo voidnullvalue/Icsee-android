@@ -1,68 +1,70 @@
-# Password change — reverse-engineering notes (libFunSDK.so, arm64-v8a)
+# Password / username change — SOLVED via decompilation
 
-Status: **password change not yet cracked.** Username change works (ships in
-v0.6.0). This documents what the native RE has established so far, so the work
-isn't lost between sessions.
+The factory app's credential-change mechanism, fully recovered from the
+decompiled Java (`DevPsdManageActivity`, `SetDevPsdActivity`) and verified
+against the live camera. **It is entirely plaintext — no AES secure channel,
+no Frida, no RSA.** (An earlier note here hypothesised an AES secure channel;
+that was wrong.)
 
-## Confirmed live (device 192.168.88.129, factory admin/no-password)
+## The three primitives
 
-- Plaintext `ModifyPassword` (msg 1040) and `ModifyUser` (1484) Password field
-  are **silently ignored**: `Ret:100` but the stored `Password` hash never
-  changes (snapshotted before/after). Tested 4 hash encodings (SofiaHash-8,
-  mod62-16, MD5-hex lower/upper) — all no-op. So it is NOT an encoding problem;
-  the plaintext channel is not privileged to change passwords.
-- `ModifyUser` **rename** (Name field) DOES apply — so account writes work in
-  general; password specifically is gated.
-- Login validates against the 8-char SofiaHash (`Password` field = `tlJwpbo6`
-  for the empty password), NOT `PasswordV2`.
+1. **`ModifyPassword`** (config-set, msg 1040) — updates the SofiaHash login
+   store:
+   ```json
+   {"Name":"ModifyPassword","ModifyPassword":{
+      "EncryptType":"MD5","UserName":"<user>",
+      "PassWord":"<SofiaHash(oldpw)>","NewPassWord":"<SofiaHash(newpw)>"},
+    "SessionID":"0x..."}
+   ```
+   (`DevMD5Encrypt` == our `SofiaHash`.)
 
-## From libFunSDK.so (symbols intact — XM code is not stripped)
+2. **`System.ExUserMap`** (config-get 1042 / config-set 1040) — the newer
+   password store. After `ModifyPassword`, the app reads `System.ExUserMap`,
+   sets the matching user's `Password` field, and writes it back:
+   ```json
+   {"Name":"System.ExUserMap","System.ExUserMap":{
+      "User":[{"Name":"<user>","Password":"<u(newpw)>"}],"UserNum":N},
+    "SessionID":"0x..."}
+   ```
+   where **`u(pw)`** (`AbstractC4571f.u`) is NOT encryption, just obfuscation:
+   ```
+   u("")  = ""
+   u(pw)  = "0001" + base64(pw) with the first two base64 chars swapped
+   e.g. u("test1234") = "0001GdVzdDEyMzQ="
+   ```
+   The device regenerates its own `PasswordV2` (16-byte AES blob) from this.
 
-Key crypto primitives (verified by disassembly):
+3. **`ChangeRandomUser`** (msg 1660, **NO login** — `DevConfigJsonNotLoginPtl`)
+   — sets initial creds on a freshly-provisioned camera whose random creds you
+   know (the BLE-pairing path). `NewPwd`/`NewName` are sent **plaintext**:
+   ```json
+   {"Name":"ChangeRandomUser","ChangeRandomUser":{
+      "RandomName":"<cur>","RandomPwd":"<cur>","NewName":"<new>","NewPwd":"<new>"}}
+   ```
+   Our `ChangeRandomUserClient` already implements this.
 
-- `XAES::sha1prng_key(seed, out)` = **SHA1(SHA1(seed))[0:16]** — the classic
-  Android `SecureRandom("SHA1PRNG").setSeed(seed)` → AES-128 key derivation.
-- `XAES::AES_ECB_Encrypt128(data, len, keyOrSeed, out, useRawKey)`:
-  `useRawKey==0` → key = `sha1prng_key(seed)`; `useRawKey==1` → key = raw 16
-  bytes. AES-128-ECB.
-- `XAES::AES_ECB_Encrypt128_FixedKey_Base64(data, len, key, outString)` — ECB
-  encrypt then base64. NOTE "FixedKey" means *the caller supplies the key*, and
-  different callers supply different keys (e.g. the `CDataCenter` local-password
-  path derives its key from a reversed device string via `StrReverseOrder`),
-  so there is not one single global constant to lift.
-- `GetRandomAesKey(out, randomA, randomB)` — builds a session AES key from the
-  handshake random strings (`GetDataBetween2Char` + `sscanf("%x")`). This is the
-  secure-comm session key path.
-- Login secure path: `CProtocolNetIP::NewLoginPTL[... AESEncrypt, RandomStrLen,
-  PwdAppendRandomStr, TokenAppendRandomStr ...]` and DH exchange
-  (`CDevProtocol::Get/SetDHParame_RandomStrA/B`). Commands can carry a plaintext
-  `"DHParameter":{"RandomStrA":"..."}` block (seen baked into an OPMonitor
-  template in the binary).
+## Live-verified facts about THIS test camera (192.168.88.129)
 
-## Working hypothesis
+- `System.ExUserMap` is readable/writable in plaintext; writing a user's
+  `Password` makes the device generate a `PasswordV2` for it (confirmed:
+  writing `u("test1234")` for admin produced `PasswordV2:"Cb0HPmw2VhI/..."`).
+- **BUT `admin`/blank is a hardcoded factory-test backdoor.** Its Memo is
+  "factory test account". Every credential change to `admin` returns `Ret:100`
+  yet `admin` keeps authenticating as blank — the stored password is ignored
+  for auth. So it cannot be secured.
+- The **real** admin account is **`xkfu`** (Memo "admin 's account"), created at
+  provisioning by the factory app with a random password we don't have
+  (`xkfu`/blank = `Ret:203`).
 
-`PasswordV2` is **device-computed** from the plaintext password submitted over
-the *secure* channel — the client does not build a `PasswordV2` blob itself
-(the literal string "PasswordV2" is absent from the .so). So changing the
-password requires:
+## What this means for the app
 
-1. RSA negotiation (msg 1010/1011) — **already implemented + live-confirmed** in
-   `crypto/PreLoginNegotiation` (1024-bit RSA, AES-128, real `NotEncryptMsgID`).
-2. A secure login (msg 1000, `AESEncrypt=1`): client generates a 16-byte AES
-   session key, RSA-wraps it with the device public key, password possibly
-   salted with the handshake RandomStr (`PwdAppendRandomStr`). **Not yet
-   reverse-engineered.**
-3. `ModifyPassword` sent over that AES session — should then be honored.
-
-The app's `AesSessionCrypto` exists but its transform/IV (CBC vs ECB) is still
-unverified against real traffic.
-
-## Fastest unlock (recommended)
-
-Static RE of the secure-login construction is a long slog. A **Frida hook on
-the factory app** during a real password change — hooking `XMAccount_AesEncrypt`,
-`sha1prng_key`, the AES funcs, and `DevCmdGeneral` — would dump the plaintext
-JSON + the AES session key at the JNI boundary in minutes, confirming the exact
-wire format and key derivation. Port to Kotlin from there. A pcap helps confirm
-the flow and the plaintext RandomStr but cannot decrypt the AES bodies (session
-key is RSA-wrapped on the wire).
+- The change protocol is plaintext and fully known — implementable directly
+  (`ModifyPassword` + `System.ExUserMap` write; `ChangeRandomUser` for the
+  no-login provisioning case).
+- It only takes effect for an account you're authenticated as with real creds.
+  On a **fresh / factory-reset** camera (blank real admin) the
+  `ModifyPassword`+`ExUserMap` path applies. On this already-provisioned test
+  unit we authenticate as the backdoor `admin`, so it can't be demonstrated
+  end-to-end here without a factory reset (or `xkfu`'s password).
+- For securing a camera the user pairs through OUR app, the correct path is
+  `ChangeRandomUser` at pairing time (we have the random creds then).
