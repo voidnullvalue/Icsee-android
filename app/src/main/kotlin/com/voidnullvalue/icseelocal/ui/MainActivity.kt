@@ -12,6 +12,8 @@ import androidx.compose.runtime.setValue
 import androidx.media3.common.util.UnstableApi
 import com.voidnullvalue.icseelocal.ui.blepairing.BlePairingScreen
 import com.voidnullvalue.icseelocal.ui.cameralist.CameraListScreen
+import com.voidnullvalue.icseelocal.ui.devicemanagement.ConfigEditorScreen
+import com.voidnullvalue.icseelocal.ui.devicemanagement.DeviceManagementScreen
 import com.voidnullvalue.icseelocal.ui.diagnostics.DiagnosticsScreen
 import com.voidnullvalue.icseelocal.ui.live.LiveControlScreen
 import com.voidnullvalue.icseelocal.ui.settings.CameraSettingsScreen
@@ -47,8 +49,19 @@ class MainActivity : ComponentActivity() {
                         is Screen.LiveControl -> LiveControlScreen(
                             cameraId = current.cameraId,
                             onOpenDiagnostics = { screen = Screen.Diagnostics(current.cameraId) },
+                            onOpenDeviceManagement = { screen = Screen.DeviceManagement(current.cameraId) },
                         )
                         is Screen.Diagnostics -> DiagnosticsScreen()
+                        is Screen.DeviceManagement -> DeviceManagementScreen(
+                            cameraId = current.cameraId,
+                            onOpenConfig = { name, label -> screen = Screen.ConfigEditor(current.cameraId, name, label) },
+                            onBack = { screen = Screen.LiveControl(current.cameraId) },
+                        )
+                        is Screen.ConfigEditor -> ConfigEditorScreen(
+                            configName = current.configName,
+                            label = current.label,
+                            onBack = { screen = Screen.DeviceManagement(current.cameraId) },
+                        )
                         is Screen.BlePairing -> BlePairingScreen(
                             onPaired = { paired -> screen = Screen.CameraSettings(null, prefillBle = paired) },
                             onCancel = { screen = Screen.CameraList },

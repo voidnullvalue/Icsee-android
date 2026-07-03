@@ -8,6 +8,7 @@ import com.voidnullvalue.icseelocal.ble.BlePairedCamera
 import com.voidnullvalue.icseelocal.ble.BleWifiProvisionCodec
 import com.voidnullvalue.icseelocal.ble.CameraBlePairingClient
 import com.voidnullvalue.icseelocal.ble.CameraBleScanner
+import com.voidnullvalue.icseelocal.config.ChangeRandomUserClient
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +71,28 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
                     _pairingState.value = BlePairingUiState.Failed(ack.errorCode, ack.detail)
                 }
             }
+        }
+    }
+
+    /**
+     * After BLE pairing succeeds, offer the user the chance to replace the
+     * camera's factory-assigned random credentials with a custom login. Updates
+     * [BlePairingUiState.Success] with new credentials if successful, or leaves
+     * them unchanged if the operation fails (user can still proceed with random
+     * credentials). Errors are not shown -- the premise is: credentials will be
+     * set eventually (manually or via [DeviceManagementViewModel.changePassword]),
+     * so a failure here is not fatal.
+     */
+    fun changeRandomUserCredentials(host: String, currentUsername: String, currentPassword: String, newUsername: String, newPassword: String) {
+        val currentState = _pairingState.value as? BlePairingUiState.Success ?: return
+        viewModelScope.launch {
+            val result = ChangeRandomUserClient.changeUser(host, 34567, currentUsername, currentPassword, newUsername, newPassword)
+            if (result is ChangeRandomUserClient.Result.Success) {
+                _pairingState.value = BlePairingUiState.Success(
+                    currentState.camera.copy(username = newUsername, password = newPassword),
+                )
+            }
+            // On failure, leave the state unchanged -- user can proceed with random credentials
         }
     }
 

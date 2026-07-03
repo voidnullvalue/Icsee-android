@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.North
 import androidx.compose.material.icons.filled.NorthEast
 import androidx.compose.material.icons.filled.NorthWest
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.South
 import androidx.compose.material.icons.filled.SouthEast
 import androidx.compose.material.icons.filled.SouthWest
@@ -90,6 +91,7 @@ private val StatusAmber = Color(0xFFFBBF24)
 fun LiveControlScreen(
     cameraId: String,
     onOpenDiagnostics: () -> Unit,
+    onOpenDeviceManagement: () -> Unit,
     viewModel: LiveControlViewModel = viewModel(),
 ) {
     LaunchedEffect(cameraId) { viewModel.load(cameraId) }
@@ -121,6 +123,9 @@ fun LiveControlScreen(
             TopAppBar(
                 title = { Text(camera?.displayName ?: "Live", fontWeight = FontWeight.SemiBold) },
                 actions = {
+                    IconButton(onClick = onOpenDeviceManagement) {
+                        Icon(Icons.Default.Settings, contentDescription = "Device management")
+                    }
                     IconButton(onClick = onOpenDiagnostics) {
                         Icon(Icons.Default.Refresh, contentDescription = "Diagnostics")
                     }

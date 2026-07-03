@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -23,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -32,10 +34,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.voidnullvalue.icseelocal.ble.BleCameraBeacon
@@ -70,6 +75,7 @@ fun BlePairingScreen(
     var selectedAddress by remember { mutableStateOf<String?>(null) }
     var ssid by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var showSetCredentialsDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(hasPermission) {
         if (hasPermission) viewModel.startScan() else permissionLauncher.launch(requiredBlePermissions)
@@ -180,6 +186,78 @@ fun BlePairingScreen(
                         Button(onClick = onCancel) { Text("Cancel") }
                     }
                 }
+            }
+        }
+    }
+
+    if (pairingState is BlePairingUiState.Success && !showSetCredentialsDialog) {
+        // Offer to set custom credentials right after pairing succeeds
+        val camera = (pairingState as BlePairingUiState.Success).camera
+        SetCredentialsPrompt(
+            camera.username,
+            camera.password,
+            onSetCredentials = { newUsername, newPassword ->
+                viewModel.changeRandomUserCredentials(camera.host, camera.username, camera.password, newUsername, newPassword)
+                showSetCredentialsDialog = true
+            },
+            onSkip = { onPaired(camera) },
+        )
+    }
+
+    if (showSetCredentialsDialog && pairingState is BlePairingUiState.Success) {
+        val camera = (pairingState as BlePairingUiState.Success).camera
+        SetCredentialsWaitingDialog(
+            onContinue = { onPaired(camera) },
+        )
+    }
+}
+
+@Composable
+private fun SetCredentialsPrompt(currentUsername: String, currentPassword: String, onSetCredentials: (String, String) -> Unit, onSkip: () -> Unit) {
+    var newUsername by remember { mutableStateOf(currentUsername) }
+    var newPassword by remember { mutableStateOf(currentPassword) }
+    Dialog(onDismissRequest = onSkip) {
+        Card {
+            Column(Modifier.padding(16.dp)) {
+                Text("Set device login password", style = MaterialTheme.typography.titleMedium)
+                Text("The camera currently has a random login assigned. You can set a custom one now, or skip and do it later.", modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    value = newUsername,
+                    onValueChange = { newUsername = it },
+                    label = { Text("Username") },
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                )
+                OutlinedTextField(
+                    value = newPassword,
+                    onValueChange = { newPassword = it },
+                    label = { Text("Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+                Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                    Button(
+                        onClick = { onSetCredentials(newUsername, newPassword) },
+                        enabled = newUsername.isNotBlank(),
+                        modifier = Modifier.padding(end = 8.dp),
+                    ) { Text("Set") }
+                    TextButton(onClick = onSkip) { Text("Skip") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SetCredentialsWaitingDialog(onContinue: () -> Unit) {
+    Dialog(onDismissRequest = {}, properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)) {
+        Card {
+            Column(Modifier.padding(16.dp).fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    CircularProgressIndicator(Modifier.size(24.dp).padding(end = 8.dp))
+                    Text("Setting credentials…", style = MaterialTheme.typography.bodyMedium)
+                }
+                Text("(This may take a moment.)", style = MaterialTheme.typography.bodySmall)
+                Button(onClick = onContinue, modifier = Modifier.padding(top = 16.dp).align(Alignment.End)) { Text("Continue") }
             }
         }
     }

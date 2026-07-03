@@ -54,6 +54,59 @@ object DvripMessageIds {
     const val DISCOVERY_PROBE = 1530
 
     /**
+     * Generic named-config commands, confirmed live against a real camera on
+     * 2026-07-03 (see PROTOCOL_NOTES.md "Generic config get/set -- LIVE
+     * CONFIRMED"). Every request shares the envelope
+     * `{"Name":"<config>","<config>":<value>,"SessionID":"0x..."}`; only the
+     * message id and the meaning of `<config>` change. These four ids sort
+     * named configs into distinct catalogs -- e.g. `Camera.Param` only
+     * responds on [CONFIG_GET]/[CONFIG_SET], while `SystemInfo` only responds
+     * on [INFO_GET] -- confirmed by testing each name against each id live,
+     * not assumed. Sourced from the decompiled vendor app's
+     * `com.lib.sdk.bean.JsonConfig`, which annotates every config name
+     * constant with its `cmdId`; cross-checked against [OPTALK_CONTROL_REQUEST]
+     * (`OPTalk` in that file also lists 1430, matching our own independently
+     * pcap-confirmed value) before trusting the rest of the file.
+     */
+    /** Read-only device/system info (SystemInfo, StorageInfo, 4GInfo, EncyptChipInfo). Response on [INFO_GET_RESPONSE]. */
+    const val INFO_GET = 1020
+    const val INFO_GET_RESPONSE = 1021
+
+    /**
+     * Per-channel named config write (Camera.Param, Detect.MotionDetect,
+     * General.General, NetWork.NetCommon, Record, ModifyPassword, ...).
+     * Live-confirmed by round-tripping General.General's exact current
+     * values back through this id and observing `Ret:100`.
+     */
+    const val CONFIG_SET = 1040
+    const val CONFIG_SET_RESPONSE = 1041
+
+    /** Per-channel named config read, counterpart to [CONFIG_SET]. Response on [CONFIG_GET_RESPONSE]. */
+    const val CONFIG_GET = 1042
+    const val CONFIG_GET_RESPONSE = 1043
+
+    /** Read-only capability/ability queries (EncodeCapability, SupportExtRecord, FishEyePlatform, ...). */
+    const val ABILITY_GET = 1360
+    const val ABILITY_GET_RESPONSE = 1361
+
+    /** Current device time as a plain string (`"YYYY-MM-DD HH:MM:SS"`), no per-config nesting. Live-confirmed. */
+    const val TIME_QUERY = 1452
+
+    /** Reboot/shutdown ("OPMachine" with an `Action` field). See PROTOCOL_NOTES.md for the confirmed/attempted action shapes. */
+    const val MACHINE_CONTROL = 1450
+
+    /** SD card management (info/format). "OPStorageManager". */
+    const val STORAGE_MANAGER = 1460
+
+    /** Recorded-file browsing: OPPlayBack (playback control), OPFileQuery (file listing), OPSCalendar (recording calendar). */
+    const val PLAYBACK_CONTROL = 1420
+    const val FILE_QUERY = 1440
+    const val CALENDAR_QUERY = 1446
+
+    /** OSD overlay text, "in-place" variant that doesn't persist to config (OPSetOSD). */
+    const val SET_OSD = 1656
+
+    /**
      * Message ids the task brief advertises as not passing through the
      * generic post-login AES envelope. Note this does *not* mean their
      * bytes are unencrypted plaintext in every case: message 1000's payload
