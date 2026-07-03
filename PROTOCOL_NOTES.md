@@ -138,6 +138,23 @@ byte-pairs of the digest, sum the pair mod 62 and map to `0-9A-Za-z`
 (alphabet
 `0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz`).
 
+**Blank passwords are hashed too — confirmed live 2026-07-03.** The
+factory `admin`/no-password account authenticates with
+`SofiaHash.hash("")` = `tlJwpbo6`, NOT a literal empty string. Probed
+directly against the camera:
+
+| `PassWord` field for `admin` | camera response |
+| --- | --- |
+| `""` (literal empty string) | `Ret:203` (rejected) |
+| `tlJwpbo6` (`SofiaHash.hash("")`) | `Ret:100` (login OK) |
+
+So the password is *always* run through `SofiaHash`, with no empty-string
+special case. (An earlier note here claimed the opposite; that claim was
+written while the camera was in a `Ret:205` lockout that masked every
+response, so it was never actually verified and was wrong.) Note this is
+DVRIP only — the separate RTSP credential store (port 554, below) really
+does take a literal blank password.
+
 **Also confirmed live, in the same session, all plaintext (no AES at all):**
 
 - Keepalive (`1006`): `{"Name":"KeepAlive","SessionID":"0x..."}` → `Ret:100`.
