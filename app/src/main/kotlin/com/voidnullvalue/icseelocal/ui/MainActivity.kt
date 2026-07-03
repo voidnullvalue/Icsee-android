@@ -50,8 +50,11 @@ class MainActivity : ComponentActivity() {
                             cameraId = current.cameraId,
                             onOpenDiagnostics = { screen = Screen.Diagnostics(current.cameraId) },
                             onOpenDeviceManagement = { screen = Screen.DeviceManagement(current.cameraId) },
+                            onBack = { screen = Screen.CameraList },
                         )
-                        is Screen.Diagnostics -> DiagnosticsScreen()
+                        is Screen.Diagnostics -> DiagnosticsScreen(
+                            onBack = { screen = Screen.LiveControl(current.cameraId) },
+                        )
                         is Screen.DeviceManagement -> DeviceManagementScreen(
                             cameraId = current.cameraId,
                             onOpenConfig = { name, label -> screen = Screen.ConfigEditor(current.cameraId, name, label) },

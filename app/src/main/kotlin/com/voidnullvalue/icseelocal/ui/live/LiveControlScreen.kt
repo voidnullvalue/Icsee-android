@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.West
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -92,6 +93,7 @@ fun LiveControlScreen(
     cameraId: String,
     onOpenDiagnostics: () -> Unit,
     onOpenDeviceManagement: () -> Unit,
+    onBack: () -> Unit,
     viewModel: LiveControlViewModel = viewModel(),
 ) {
     LaunchedEffect(cameraId) { viewModel.load(cameraId) }
@@ -122,6 +124,11 @@ fun LiveControlScreen(
         topBar = {
             TopAppBar(
                 title = { Text(camera?.displayName ?: "Live", fontWeight = FontWeight.SemiBold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
                 actions = {
                     IconButton(onClick = onOpenDeviceManagement) {
                         Icon(Icons.Default.Settings, contentDescription = "Device management")
