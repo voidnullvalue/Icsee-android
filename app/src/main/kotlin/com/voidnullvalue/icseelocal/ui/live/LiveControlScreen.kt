@@ -12,8 +12,10 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.East
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Mic
@@ -82,6 +85,8 @@ import androidx.media3.ui.PlayerView
 import com.voidnullvalue.icseelocal.model.ConnectionState
 import com.voidnullvalue.icseelocal.ptz.PtzCommand
 import com.voidnullvalue.icseelocal.video.RtspPlayerState
+import kotlin.math.atan2
+import kotlin.math.hypot
 
 private val StatusGreen = Color(0xFF4ADE80)
 private val StatusAmber = Color(0xFFFBBF24)
@@ -228,6 +233,7 @@ fun LiveControlScreen(
                     )
                 }
 
+                PresetBar(onGoto = viewModel::gotoPreset, onSave = viewModel::setPreset)
                 SpeedControl(speed = speed, onChange = viewModel::setSpeedStep)
                 Spacer(Modifier.height(8.dp))
             }
@@ -237,12 +243,69 @@ fun LiveControlScreen(
     if (fullscreen) {
         Dialog(onDismissRequest = { fullscreen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Box(
-                Modifier.fillMaxSize().background(Color.Black).clickable { fullscreen = false },
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    // Drag anywhere on the video to steer the camera: the drag
+                    // direction maps to the same 8-way PTZ commands the on-screen
+                    // pad uses. Tap-to-close is intentionally gone (it collided
+                    // with dragging) -- use the X button instead.
+                    .pointerInput(Unit) {
+                        var current: PtzCommand? = null
+                        var total = androidx.compose.ui.geometry.Offset.Zero
+                        detectDragGestures(
+                            onDragStart = { total = androidx.compose.ui.geometry.Offset.Zero; current = null },
+                            onDragEnd = { if (current != null) viewModel.onPtzUp(); current = null },
+                            onDragCancel = { if (current != null) viewModel.onPtzCancel(); current = null },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                total += amount
+                                val next = dragToPtz(total.x, total.y)
+                                if (next != null && next != current) {
+                                    if (current == null) viewModel.onPtzDown(next) else viewModel.onPtzDirectionChange(next)
+                                    current = next
+                                }
+                            },
+                        )
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 VideoSurface(viewModel, rtspState, Modifier.fillMaxSize())
+                IconButton(
+                    onClick = { fullscreen = false },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x99000000)),
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Exit full screen", tint = Color.White)
+                }
             }
         }
+    }
+}
+
+/**
+ * Maps a drag vector (screen coords: +x right, +y down) to the 8-way PTZ
+ * command for that visual direction, using the same left/right-swapped
+ * convention as [PtzPad] (this camera pans opposite its DirectionLeft/Right
+ * wire names). Returns null inside a small dead zone so a stationary press
+ * doesn't move the camera.
+ */
+private fun dragToPtz(dx: Float, dy: Float): PtzCommand? {
+    if (hypot(dx, dy) < 48f) return null
+    // atan2 with -dy so 0deg = visual right, 90deg = visual up.
+    val deg = ((Math.toDegrees(atan2(-dy.toDouble(), dx.toDouble())) % 360) + 360) % 360
+    return when {
+        deg < 22.5 || deg >= 337.5 -> PtzCommand.DIRECTION_LEFT       // right
+        deg < 67.5 -> PtzCommand.DIRECTION_LEFT_UP                     // up-right
+        deg < 112.5 -> PtzCommand.DIRECTION_UP                         // up
+        deg < 157.5 -> PtzCommand.DIRECTION_RIGHT_UP                   // up-left
+        deg < 202.5 -> PtzCommand.DIRECTION_RIGHT                      // left
+        deg < 247.5 -> PtzCommand.DIRECTION_RIGHT_DOWN                 // down-left
+        deg < 292.5 -> PtzCommand.DIRECTION_DOWN                       // down
+        else -> PtzCommand.DIRECTION_LEFT_DOWN                         // down-right
     }
 }
 
@@ -399,6 +462,32 @@ private fun VideoSurface(viewModel: LiveControlViewModel, rtspState: RtspPlayerS
                 color = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier.padding(16.dp),
             )
+        }
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun PresetBar(onGoto: (Int) -> Unit, onSave: (Int) -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = 8.dp)) {
+        Text(
+            "Presets — tap to recall, hold to save",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 4.dp)) {
+            (1..4).forEach { n ->
+                Box(
+                    Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                        .combinedClickable(onClick = { onGoto(n) }, onLongClick = { onSave(n) }),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("$n", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                }
+            }
         }
     }
 }

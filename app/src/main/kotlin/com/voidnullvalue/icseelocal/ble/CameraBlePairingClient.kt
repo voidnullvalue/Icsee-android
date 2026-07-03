@@ -95,6 +95,11 @@ class CameraBlePairingClient(private val context: Context) {
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         val error = IllegalStateException("BLE disconnected (status=$status)")
                         if (!connected.isCompleted) connected.completeExceptionally(error)
+                        // The camera often drops the link in the same instant it emits the
+                        // final ACK notification. Drain anything already buffered before
+                        // giving up, so a fully-received ACK that just hasn't been parsed
+                        // yet still wins over the disconnect.
+                        if (!ackResult.isCompleted) handleNotify(ByteArray(0))
                         if (!ackResult.isCompleted) ackResult.completeExceptionally(error)
                     }
                 }
@@ -137,6 +142,14 @@ class CameraBlePairingClient(private val context: Context) {
             gatt = g
             withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) { connected.await() }
                 ?: return BleWifiProvisionCodec.WifiConfigAck.Failure(ERROR_CONNECT_TIMEOUT)
+
+            // Ask for the fastest connection interval (~7.5ms vs the ~30-50ms
+            // default). The camera joins Wi-Fi and drops BLE within a few tens of
+            // ms of receiving the credentials, so the assigned-credentials ACK
+            // notification only makes it out if the link is running fast enough --
+            // this is the main reason the ACK (and thus the real per-device login)
+            // was being missed. Best-effort: no callback to await.
+            g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
 
             // The vendor's BLE library (inuker BleConnectRequest) waits 300ms after the
             // connection comes up before discovering services, and on an empty/failed
