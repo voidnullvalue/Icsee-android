@@ -245,8 +245,11 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
         viewModelScope.launch {
             _state.value = _state.value.copy(busy = true, passwordChangeInFlight = true)
             runCatching {
-                val hashOld = SofiaHash.hash(creds.password)
-                val hashNew = SofiaHash.hash(newPassword)
+                // A blank password must be sent as a literal empty string, not
+                // SofiaHash.hash("") -- see the identical note in
+                // DvripLoginNegotiator.buildLoginRequestJson.
+                val hashOld = if (creds.password.isEmpty()) "" else SofiaHash.hash(creds.password)
+                val hashNew = if (newPassword.isEmpty()) "" else SofiaHash.hash(newPassword)
                 val body = buildJsonObject {
                     put("EncryptType", "MD5")
                     put("UserName", creds.username)

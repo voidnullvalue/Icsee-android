@@ -76,7 +76,13 @@ class DvripLoginNegotiator(
         val obj = buildJsonObject {
             put("EncryptType", "MD5")
             put("LoginType", "DVRIP-Web")
-            put("PassWord", SofiaHash.hash(credentials.password))
+            // A blank password (the factory-default "admin"/no-password account
+            // BLE pairing hands back, see PROTOCOL_NOTES.md "Writing the
+            // credential frame") must be sent as a literal empty string here, not
+            // SofiaHash.hash("") -- that hashes to a non-empty 8-char string
+            // ("tlJwpbo6"), which the camera's no-password account rejects with
+            // Ret:205 since it isn't the hash of *no* password.
+            put("PassWord", if (credentials.password.isEmpty()) "" else SofiaHash.hash(credentials.password))
             put("UserName", credentials.username)
         }
         return Json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), obj)
