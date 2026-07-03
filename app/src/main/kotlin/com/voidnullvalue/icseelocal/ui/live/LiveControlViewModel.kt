@@ -92,36 +92,57 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     @UnstableApi
     fun load(cameraId: String) {
         viewModelScope.launch {
-            val found = store.cameras.first().firstOrNull { it.id == cameraId } ?: return@launch
+            try {
+                val found = store.cameras.first().firstOrNull { it.id == cameraId } ?: return@launch
 
-            // Prevent multiple concurrent loads for the same camera by shutting down
-            // any existing session first. This also handles the case where the user
-            // quickly navigates away and back.
-            sessionManager?.shutdown()
-            sessionManager = null
-            wiredSessionId = null
-            videoStatsJob?.cancel()
-            videoController?.stop()
-            stopTalk()
+                // Prevent multiple concurrent loads for the same camera by shutting down
+                // any existing session first. This also handles the case where the user
+                // quickly navigates away and back.
+                try {
+                    sessionManager?.shutdown()
+                    sessionManager = null
+                    wiredSessionId = null
+                    videoStatsJob?.cancel()
+                    videoController?.stop()
+                    stopTalk()
+                } catch (e: Exception) {
+                    // Cleanup failures shouldn't block loading the new camera
+                }
 
-            _camera.value = found
-            val credentials = store.credentialsFor(cameraId) ?: CameraCredentials("", "")
-            // RTSP is independent of the DVRIP session (confirmed live: no DVRIP
-            // login needed for RTSP at all), so start it immediately rather than
-            // waiting on Authenticated. found.channel is 0-based (DVRIP
-            // convention); this camera's RTSP URL convention is 1-based.
-            rtspPlayer.start(found.host, found.rtspPort, credentials.username, credentials.password, found.channel + 1)
-            val manager = CameraSessionManager(found.host, found.dvripPort)
-            sessionManager = manager
-            viewModelScope.launch {
-                manager.state.collect { state ->
-                    _connectionState.value = state
-                    if (state is ConnectionState.Authenticated) {
-                        wireControllers(found, state)
+                _camera.value = found
+                val credentials = try {
+                    store.credentialsFor(cameraId) ?: CameraCredentials("", "")
+                } catch (e: Exception) {
+                    // Credential decryption failure -- use empty credentials
+                    // (user can re-test to verify actual credentials work)
+                    CameraCredentials("", "")
+                }
+
+                // RTSP is independent of the DVRIP session (confirmed live: no DVRIP
+                // login needed for RTSP at all), so start it immediately rather than
+                // waiting on Authenticated. found.channel is 0-based (DVRIP
+                // convention); this camera's RTSP URL convention is 1-based.
+                try {
+                    rtspPlayer.start(found.host, found.rtspPort, credentials.username, credentials.password, found.channel + 1)
+                } catch (e: Exception) {
+                    // RTSP startup failure is not fatal; DVRIP session can still work
+                }
+
+                val manager = CameraSessionManager(found.host, found.dvripPort)
+                sessionManager = manager
+                viewModelScope.launch {
+                    manager.state.collect { state ->
+                        _connectionState.value = state
+                        if (state is ConnectionState.Authenticated) {
+                            wireControllers(found, state)
+                        }
                     }
                 }
+                manager.connect(credentials)
+            } catch (e: Exception) {
+                // Catastrophic failure -- transition to failed state
+                _connectionState.value = ConnectionState.Failed("Failed to load camera: ${e.message}")
             }
-            manager.connect(credentials)
         }
     }
 
