@@ -194,6 +194,9 @@ class CameraSettingsViewModel(application: Application) : AndroidViewModel(appli
                         }
                     } finally {
                         transport.close()
+                        // Brief delay to allow the camera to fully close the session before
+                        // another connection is attempted (prevents ret=205 conflicts).
+                        kotlinx.coroutines.delay(500)
                     }
                 }
             } catch (e: Exception) {

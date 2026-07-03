@@ -93,6 +93,17 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     fun load(cameraId: String) {
         viewModelScope.launch {
             val found = store.cameras.first().firstOrNull { it.id == cameraId } ?: return@launch
+
+            // Prevent multiple concurrent loads for the same camera by shutting down
+            // any existing session first. This also handles the case where the user
+            // quickly navigates away and back.
+            sessionManager?.shutdown()
+            sessionManager = null
+            wiredSessionId = null
+            videoStatsJob?.cancel()
+            videoController?.stop()
+            stopTalk()
+
             _camera.value = found
             val credentials = store.credentialsFor(cameraId) ?: CameraCredentials("", "")
             // RTSP is independent of the DVRIP session (confirmed live: no DVRIP
