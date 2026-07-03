@@ -100,6 +100,7 @@ class CameraSettingsViewModel(application: Application) : AndroidViewModel(appli
             host = beacon.hostIp,
             dvripPort = (beacon.tcpPort.takeIf { it > 0 } ?: 34567).toString(),
             isExisting = false,
+            username = "admin",
             mac = beacon.mac.ifBlank { null },
             serialNumber = beacon.serialNumber.ifBlank { null },
             pid = beacon.pid.ifBlank { null },
