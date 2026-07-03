@@ -61,7 +61,7 @@ class DvripLoginNegotiator(
                 val login = LoginResponseParser.parse(json)
                     ?: throw LoginNegotiationBlockedException("could not parse message 1001 response: $json")
                 if (!login.success) {
-                    throw LoginNegotiationBlockedException("login rejected: Ret=${login.ret}")
+                    throw LoginNegotiationBlockedException("login rejected: Ret=${login.ret}", ret = login.ret)
                 }
                 AuthenticatedSession(
                     sessionId = login.sessionId,

@@ -9,12 +9,16 @@ import com.voidnullvalue.icseelocal.dvrip.DvripTransport
 import com.voidnullvalue.icseelocal.model.CameraDescriptor
 import com.voidnullvalue.icseelocal.model.StreamType
 import com.voidnullvalue.icseelocal.session.CameraCredentials
+import com.voidnullvalue.icseelocal.session.DvripLoginNegotiator
+import com.voidnullvalue.icseelocal.session.LoginNegotiationBlockedException
 import com.voidnullvalue.icseelocal.storage.CameraStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
@@ -171,36 +175,44 @@ class CameraSettingsViewModel(application: Application) : AndroidViewModel(appli
         val s = _state.value
         viewModelScope.launch {
             _state.value = s.copy(testing = true, testResult = null)
-            val result = try {
-                withTimeout(10000) {
-                    val transport = DvripTransport(s.host, s.dvripPort.toIntOrNull() ?: 34567)
-                    transport.connect()
-                    try {
-                        // Perform full DVRIP login verification with the provided credentials
-                        if (s.username.isNotBlank() && s.password.isNotBlank()) {
-                            val credentials = CameraCredentials(s.username, s.password)
-                            val negotiator = com.voidnullvalue.icseelocal.session.DvripLoginNegotiator()
-                            val session = negotiator.negotiate(transport, credentials)
-                            // Send a keepalive to verify the session is active
-                            transport.send(
-                                session = session.sessionId,
-                                messageId = 1006,
-                                payload = byteArrayOf(),
-                            )
-                            "✓ Login successful on ${s.host}:${s.dvripPort} as ${s.username}"
-                        } else {
-                            // No credentials provided, just verify TCP connectivity
-                            "✓ TCP connection to ${s.host}:${s.dvripPort} succeeded (provide username/password for full login verification)"
+            // All the socket work runs off the main thread; catching Throwable
+            // here guarantees nothing from the connect/login path can escape and
+            // force-close the app -- the worst case is a failure message.
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    withTimeout(10000) {
+                        val transport = DvripTransport(s.host, s.dvripPort.toIntOrNull() ?: 34567)
+                        transport.connect()
+                        try {
+                            // A blank password is a real credential for these cameras
+                            // (the factory admin/no-password account), so verify the
+                            // actual login rather than falling back to a misleading
+                            // TCP-only check. Only skip login when no username is set.
+                            if (s.username.isBlank()) {
+                                "✓ TCP connection to ${s.host}:${s.dvripPort} succeeded (enter a username to verify login)"
+                            } else {
+                                val credentials = CameraCredentials(s.username, s.password)
+                                val negotiator = DvripLoginNegotiator()
+                                negotiator.negotiate(transport, credentials)
+                                val shown = if (s.password.isBlank()) "${s.username} (no password)" else s.username
+                                "✓ Login successful on ${s.host}:${s.dvripPort} as $shown"
+                            }
+                        } finally {
+                            transport.close()
+                            // Let the camera fully tear down this session before any
+                            // subsequent connection is attempted.
+                            kotlinx.coroutines.delay(500)
                         }
-                    } finally {
-                        transport.close()
-                        // Brief delay to allow the camera to fully close the session before
-                        // another connection is attempted (prevents ret=205 conflicts).
-                        kotlinx.coroutines.delay(500)
+                    }
+                }.getOrElse { e ->
+                    val locked = (e as? LoginNegotiationBlockedException)?.isAccountLocked == true
+                    if (locked) {
+                        "✗ Login temporarily locked by the camera (Ret:205) after repeated attempts. " +
+                            "Wait a few minutes or power-cycle the camera, then test once."
+                    } else {
+                        "✗ Connection failed: ${e.message}"
                     }
                 }
-            } catch (e: Exception) {
-                "✗ Connection failed: ${e.message}"
             }
             _state.value = _state.value.copy(testing = false, testResult = result)
         }

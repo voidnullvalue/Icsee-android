@@ -123,13 +123,31 @@ class CameraSessionManager(
                     "connect failed: ${e.message}",
                 ),
             )
-            if (isManual) {
+            // A credential rejection will never succeed by retrying, and hammering
+            // the camera with repeated rejected logins is exactly what trips its
+            // account lockout (Ret:205). So an auth rejection goes straight to
+            // Failed with a clear message and does NOT feed the auto-reconnect
+            // loop, even on a non-manual (keepalive-triggered) attempt. Only
+            // transient transport errors are worth reconnecting on.
+            val authRejection = e as? LoginNegotiationBlockedException
+            if (authRejection?.isAuthRejection == true) {
+                transition(ConnectionState.Failed(authFailureReason(authRejection)))
+            } else if (isManual) {
                 transition(ConnectionState.Failed(e.message ?: e.toString()))
             } else {
                 scheduleReconnect(credentials, reason = e.message ?: e.toString())
             }
         }
     }
+
+    private fun authFailureReason(e: LoginNegotiationBlockedException): String =
+        if (e.isAccountLocked) {
+            "Login temporarily locked by the camera after repeated attempts (Ret:205). " +
+                "Wait a few minutes (or power-cycle the camera) before trying again, then " +
+                "reconnect once with the correct credentials."
+        } else {
+            "Login rejected by the camera (Ret:${e.ret}). Check the username and password."
+        }
 
     private fun scheduleReconnect(credentials: CameraCredentials, reason: String) {
         keepalive?.stop()
