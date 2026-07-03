@@ -25,11 +25,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.voidnullvalue.icseelocal.model.ConnectionState
+import com.voidnullvalue.icseelocal.ui.components.RevealablePasswordField
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -44,6 +44,7 @@ fun DeviceManagementScreen(
     LaunchedEffect(cameraId) { viewModel.load(cameraId) }
     val state by viewModel.state.collectAsState()
     var showPasswordDialog by remember { mutableStateOf(false) }
+    var showUsernameDialog by remember { mutableStateOf(false) }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Device management") }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
@@ -107,9 +108,12 @@ fun DeviceManagementScreen(
                 }
             }
 
-            // -- Change password --
+            // -- Change credentials --
             SectionCard(title = "Login") {
-                Button(onClick = { showPasswordDialog = true }) { Text("Change password") }
+                Row {
+                    Button(onClick = { showUsernameDialog = true }, modifier = Modifier.padding(end = 8.dp)) { Text("Change username") }
+                    Button(onClick = { showPasswordDialog = true }) { Text("Change password") }
+                }
             }
 
             // -- Reboot --
@@ -132,6 +136,16 @@ fun DeviceManagementScreen(
                 showPasswordDialog = false
             },
             onDismiss = { showPasswordDialog = false },
+        )
+    }
+    if (showUsernameDialog) {
+        ChangeUsernameDialog(
+            busy = state.busy,
+            onConfirm = { newUsername ->
+                viewModel.changeUsername(newUsername)
+                showUsernameDialog = false
+            },
+            onDismiss = { showUsernameDialog = false },
         )
     }
 }
@@ -190,18 +204,16 @@ private fun ChangePasswordDialog(busy: Boolean, onConfirm: (String) -> Unit, onD
         Card {
             Column(Modifier.padding(16.dp)) {
                 Text("Change device login password", style = MaterialTheme.typography.titleMedium)
-                OutlinedTextField(
+                RevealablePasswordField(
                     value = newPassword,
                     onValueChange = { newPassword = it },
-                    label = { Text("New password") },
-                    visualTransformation = PasswordVisualTransformation(),
+                    label = "New password",
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                 )
-                OutlinedTextField(
+                RevealablePasswordField(
                     value = confirmPassword,
                     onValueChange = { confirmPassword = it },
-                    label = { Text("Confirm new password") },
-                    visualTransformation = PasswordVisualTransformation(),
+                    label = "Confirm new password",
                     isError = mismatch,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 )
@@ -212,6 +224,38 @@ private fun ChangePasswordDialog(busy: Boolean, onConfirm: (String) -> Unit, onD
                     Button(
                         onClick = { onConfirm(newPassword) },
                         enabled = !busy && newPassword.isNotBlank() && !mismatch,
+                        modifier = Modifier.padding(end = 8.dp),
+                    ) { Text(if (busy) "Saving…" else "Save") }
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChangeUsernameDialog(busy: Boolean, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var newUsername by remember { mutableStateOf("") }
+    Dialog(onDismissRequest = onDismiss) {
+        Card {
+            Column(Modifier.padding(16.dp)) {
+                Text("Change device login username", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "The camera will be reconnected under the new username. The password is unchanged.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                OutlinedTextField(
+                    value = newUsername,
+                    onValueChange = { newUsername = it },
+                    label = { Text("New username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                )
+                Row(Modifier.padding(top = 16.dp)) {
+                    Button(
+                        onClick = { onConfirm(newUsername) },
+                        enabled = !busy && newUsername.isNotBlank(),
                         modifier = Modifier.padding(end = 8.dp),
                     ) { Text(if (busy) "Saving…" else "Save") }
                     TextButton(onClick = onDismiss) { Text("Cancel") }

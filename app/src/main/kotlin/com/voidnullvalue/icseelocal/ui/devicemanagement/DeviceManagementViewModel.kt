@@ -15,8 +15,10 @@ import com.voidnullvalue.icseelocal.model.ConnectionState
 import com.voidnullvalue.icseelocal.session.CameraCredentials
 import com.voidnullvalue.icseelocal.session.CameraSessionManager
 import com.voidnullvalue.icseelocal.session.DvripCommandChannel
+import com.voidnullvalue.icseelocal.session.DvripLoginNegotiator
 import com.voidnullvalue.icseelocal.storage.CameraStore
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,9 +27,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /** Named configs this screen offers as generic advanced editors -- each answers on [DvripConfigChannel.getConfig]/[DvripConfigChannel.setConfig]. */
@@ -264,18 +272,124 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                 }.toString()
                 val text = sendAndAwait(transport, channel, DvripMessageIds.CONFIG_SET, DvripMessageIds.CONFIG_SET_RESPONSE, json)
                 val ret = text?.let { Regex("\"Ret\"\\s*:\\s*(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
-                if (ret == 100) {
+                if (ret != 100) {
+                    _state.value = _state.value.copy(errorMessage = "Password change rejected by the camera (Ret=$ret)")
+                    return@runCatching
+                }
+                // Ret:100 alone is NOT proof the change applied. Some firmware
+                // (this test camera included) ACKs the legacy MD5 ModifyPassword
+                // with Ret:100 but validates login against a separate PasswordV2
+                // blob, so the password never actually changes. Verify by opening
+                // a fresh login with the new password before claiming success --
+                // never trust the ACK. See PROTOCOL_NOTES.md "Account management".
+                val applied = verifyLogin(cam.host, cam.dvripPort, creds.username, newPassword)
+                if (applied) {
                     val newCreds = CameraCredentials(creds.username, newPassword)
                     store.save(cam, newCreds)
                     credentials = newCreds
+                    sessionManager?.connect(newCreds)
                     _state.value = _state.value.copy(statusMessage = "Password changed")
                 } else {
-                    _state.value = _state.value.copy(errorMessage = "Password change failed: Ret=$ret")
+                    _state.value = _state.value.copy(
+                        errorMessage = "The camera accepted the request but the new password does not " +
+                            "work -- this firmware likely requires an encrypted password scheme this app " +
+                            "can't produce yet. Password unchanged.",
+                    )
                 }
             }.onFailure { _state.value = _state.value.copy(errorMessage = it.message ?: "Password change failed") }
             _state.value = _state.value.copy(busy = false, passwordChangeInFlight = false)
         }
     }
+
+    /**
+     * Changes the device account's username via `ModifyUser` (msg 1484):
+     * fetches the full account object with `GetAllUser` (msg 1472), rewrites
+     * its `Name`, and submits it back. Live-confirmed working 2026-07-03.
+     * The password is unaffected (it rides along in the object unchanged).
+     *
+     * Renaming invalidates the current control session, so on success we
+     * verify a fresh login under the new name, persist the new credentials,
+     * and reconnect the live session under the new identity.
+     */
+    fun changeUsername(newUsername: String) {
+        val manager = sessionManager ?: return
+        val transport = manager.controlTransport ?: return
+        val channel = manager.commandChannel ?: return
+        val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
+        val cam = camera ?: return
+        val creds = credentials ?: return
+        if (newUsername.isBlank() || newUsername == creds.username) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(busy = true)
+            runCatching {
+                val sidHex = "0x%08x".format(sid.toLong())
+                val listText = sendAndAwait(
+                    transport, channel,
+                    DvripMessageIds.USER_GET_ALL, DvripMessageIds.USER_GET_ALL_RESPONSE,
+                    buildJsonObject { put("Name", "GetAllUser"); put("SessionID", sidHex) }.toString(),
+                )
+                val users = listText?.let { Json.parseToJsonElement(it) as? JsonObject }
+                    ?.get("Users")?.jsonArray
+                    ?: run {
+                        _state.value = _state.value.copy(errorMessage = "Could not read the account list from the camera")
+                        return@runCatching
+                    }
+                val currentUser = users.map { it as JsonObject }
+                    .firstOrNull { it["Name"]?.jsonPrimitive?.content == creds.username }
+                    ?: run {
+                        _state.value = _state.value.copy(errorMessage = "Account '${creds.username}' not found on the camera")
+                        return@runCatching
+                    }
+                val renamed = JsonObject(currentUser.toMutableMap().apply { put("Name", JsonPrimitive(newUsername)) })
+                val request = buildJsonObject {
+                    put("Name", "ModifyUser")
+                    put("UserName", creds.username)
+                    put("User", renamed)
+                    put("SessionID", sidHex)
+                }.toString()
+                val text = sendAndAwait(transport, channel, DvripMessageIds.USER_MODIFY, DvripMessageIds.USER_MODIFY_RESPONSE, request)
+                val ret = text?.let { Regex("\"Ret\"\\s*:\\s*(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+                if (ret != 100) {
+                    _state.value = _state.value.copy(errorMessage = "Username change rejected by the camera (Ret=$ret)")
+                    return@runCatching
+                }
+                val applied = verifyLogin(cam.host, cam.dvripPort, newUsername, creds.password)
+                if (applied) {
+                    val newCreds = CameraCredentials(newUsername, creds.password)
+                    store.save(cam, newCreds)
+                    credentials = newCreds
+                    sessionManager?.connect(newCreds)
+                    _state.value = _state.value.copy(statusMessage = "Username changed to '$newUsername'")
+                } else {
+                    _state.value = _state.value.copy(
+                        errorMessage = "The camera accepted the request but login under '$newUsername' failed. " +
+                            "Username may be unchanged.",
+                    )
+                }
+            }.onFailure { _state.value = _state.value.copy(errorMessage = it.message ?: "Username change failed") }
+            _state.value = _state.value.copy(busy = false)
+        }
+    }
+
+    /**
+     * Opens a throwaway DVRIP login with the given credentials purely to check
+     * whether they authenticate, then closes it. Used to verify a
+     * password/username change actually took effect rather than trusting the
+     * command's Ret:100 ACK. Returns false on any connection/auth failure.
+     */
+    private suspend fun verifyLogin(host: String, port: Int, username: String, password: String): Boolean =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val probe = DvripTransport(host, port)
+                try {
+                    probe.connect()
+                    DvripLoginNegotiator().negotiate(probe, CameraCredentials(username, password))
+                    true
+                } finally {
+                    probe.close()
+                }
+            }.getOrDefault(false)
+        }
 
     fun clearStatus() {
         _state.value = _state.value.copy(statusMessage = null, errorMessage = null)

@@ -107,6 +107,22 @@ object DvripMessageIds {
     const val SET_OSD = 1656
 
     /**
+     * Account management. `GetAllUser` (empty body) returns `{"Users":[...]}`
+     * with each account's full object (Name, Group, AuthorityList, Password
+     * hash, PasswordV2, ...). `ModifyUser` submits a full user object with a
+     * changed field back. Both live-confirmed 2026-07-03 against a real
+     * camera: renaming the admin account via [USER_MODIFY] took effect (the
+     * new name appeared in a follow-up [USER_GET_ALL] and login succeeded
+     * under it). Sourced from the vendor app's `AboutDevModifyPwdActivity`
+     * (`FunSDK.DevCmdGeneral(..., 1472, "GetAllUser", ...)` and
+     * `..., 1484, "ModifyUser", ...`).
+     */
+    const val USER_GET_ALL = 1472
+    const val USER_GET_ALL_RESPONSE = 1473
+    const val USER_MODIFY = 1484
+    const val USER_MODIFY_RESPONSE = 1485
+
+    /**
      * Message ids the task brief advertises as not passing through the
      * generic post-login AES envelope. Note this does *not* mean their
      * bytes are unencrypted plaintext in every case: message 1000's payload

@@ -34,11 +34,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.voidnullvalue.icseelocal.ble.BleCameraBeacon
+import com.voidnullvalue.icseelocal.ui.components.RevealablePasswordField
 import com.voidnullvalue.icseelocal.ble.BlePairedCamera
 import com.voidnullvalue.icseelocal.ble.CameraBlePairingClient
 
@@ -103,11 +103,10 @@ fun BlePairingScreen(
                             label = { Text("WiFi network name (SSID)") },
                             modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                         )
-                        OutlinedTextField(
+                        RevealablePasswordField(
                             value = password,
                             onValueChange = { password = it },
-                            label = { Text("WiFi password") },
-                            visualTransformation = PasswordVisualTransformation(),
+                            label = "WiFi password",
                             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                         )
                         Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
