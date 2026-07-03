@@ -72,6 +72,7 @@ fun BlePairingScreen(
     val beacons by viewModel.beacons.collectAsState()
     val scanError by viewModel.scanError.collectAsState()
     val pairingState by viewModel.pairingState.collectAsState()
+    val credentialChangeState by viewModel.credentialChangeState.collectAsState()
     var selectedAddress by remember { mutableStateOf<String?>(null) }
     var ssid by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -190,25 +191,35 @@ fun BlePairingScreen(
         }
     }
 
-    if (pairingState is BlePairingUiState.Success && !showSetCredentialsDialog) {
-        // Offer to set custom credentials right after pairing succeeds
+    if (pairingState is BlePairingUiState.Success) {
         val camera = (pairingState as BlePairingUiState.Success).camera
-        SetCredentialsPrompt(
-            camera.username,
-            camera.password,
-            onSetCredentials = { newUsername, newPassword ->
-                viewModel.changeRandomUserCredentials(camera.host, camera.username, camera.password, newUsername, newPassword)
-                showSetCredentialsDialog = true
-            },
-            onSkip = { onPaired(camera) },
-        )
-    }
-
-    if (showSetCredentialsDialog && pairingState is BlePairingUiState.Success) {
-        val camera = (pairingState as BlePairingUiState.Success).camera
-        SetCredentialsWaitingDialog(
-            onContinue = { onPaired(camera) },
-        )
+        when {
+            credentialChangeState == CredentialChangeState.Idle -> {
+                // Offer to set custom credentials right after pairing succeeds
+                SetCredentialsPrompt(
+                    camera.username,
+                    camera.password,
+                    onSetCredentials = { newUsername, newPassword ->
+                        viewModel.changeRandomUserCredentials(camera.host, camera.username, camera.password, newUsername, newPassword)
+                    },
+                    onSkip = { onPaired(camera) },
+                )
+            }
+            credentialChangeState == CredentialChangeState.InProgress -> {
+                SetCredentialsWaitingDialog()
+            }
+            credentialChangeState == CredentialChangeState.Success -> {
+                // Auto-proceed with updated credentials
+                LaunchedEffect(Unit) { onPaired(camera) }
+            }
+            credentialChangeState is CredentialChangeState.Failed -> {
+                val failedState = credentialChangeState as CredentialChangeState.Failed
+                SetCredentialsErrorDialog(
+                    errorMessage = failedState.detail,
+                    onContinueAnyway = { onPaired(camera) },
+                )
+            }
+        }
     }
 }
 
@@ -248,7 +259,7 @@ private fun SetCredentialsPrompt(currentUsername: String, currentPassword: Strin
 }
 
 @Composable
-private fun SetCredentialsWaitingDialog(onContinue: () -> Unit) {
+private fun SetCredentialsWaitingDialog() {
     Dialog(onDismissRequest = {}, properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)) {
         Card {
             Column(Modifier.padding(16.dp).fillMaxWidth()) {
@@ -257,7 +268,20 @@ private fun SetCredentialsWaitingDialog(onContinue: () -> Unit) {
                     Text("Setting credentials…", style = MaterialTheme.typography.bodyMedium)
                 }
                 Text("(This may take a moment.)", style = MaterialTheme.typography.bodySmall)
-                Button(onClick = onContinue, modifier = Modifier.padding(top = 16.dp).align(Alignment.End)) { Text("Continue") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SetCredentialsErrorDialog(errorMessage: String, onContinueAnyway: () -> Unit) {
+    Dialog(onDismissRequest = onContinueAnyway) {
+        Card {
+            Column(Modifier.padding(16.dp).fillMaxWidth()) {
+                Text("Failed to set credentials", style = MaterialTheme.typography.titleMedium)
+                Text(errorMessage, modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
+                Text("You can try again later in camera settings.", modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
+                Button(onClick = onContinueAnyway, modifier = Modifier.padding(top = 16.dp).align(Alignment.End)) { Text("Continue with random credentials") }
             }
         }
     }

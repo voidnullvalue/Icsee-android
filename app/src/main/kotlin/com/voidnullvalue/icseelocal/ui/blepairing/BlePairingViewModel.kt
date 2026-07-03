@@ -22,6 +22,13 @@ sealed class BlePairingUiState {
     data class Failed(val errorCode: Int, val detail: String? = null) : BlePairingUiState()
 }
 
+sealed class CredentialChangeState {
+    data object Idle : CredentialChangeState()
+    data object InProgress : CredentialChangeState()
+    data object Success : CredentialChangeState()
+    data class Failed(val detail: String) : CredentialChangeState()
+}
+
 class BlePairingViewModel(application: Application) : AndroidViewModel(application) {
     private val scanner = CameraBleScanner(application)
     private val pairingClient = CameraBlePairingClient(application)
@@ -34,6 +41,9 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
 
     private val _pairingState = MutableStateFlow<BlePairingUiState>(BlePairingUiState.Idle)
     val pairingState: StateFlow<BlePairingUiState> = _pairingState.asStateFlow()
+
+    private val _credentialChangeState = MutableStateFlow<CredentialChangeState>(CredentialChangeState.Idle)
+    val credentialChangeState: StateFlow<CredentialChangeState> = _credentialChangeState.asStateFlow()
 
     private var scanJob: Job? = null
 
@@ -79,26 +89,29 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
      * camera's factory-assigned random credentials with a custom login. Updates
      * [BlePairingUiState.Success] with new credentials if successful, or leaves
      * them unchanged if the operation fails (user can still proceed with random
-     * credentials). Errors are not shown -- the premise is: credentials will be
-     * set eventually (manually or via [DeviceManagementViewModel.changePassword]),
-     * so a failure here is not fatal.
+     * credentials).
      */
     fun changeRandomUserCredentials(host: String, currentUsername: String, currentPassword: String, newUsername: String, newPassword: String) {
         val currentState = _pairingState.value as? BlePairingUiState.Success ?: return
+        _credentialChangeState.value = CredentialChangeState.InProgress
         viewModelScope.launch {
             val result = ChangeRandomUserClient.changeUser(host, 34567, currentUsername, currentPassword, newUsername, newPassword)
             if (result is ChangeRandomUserClient.Result.Success) {
                 _pairingState.value = BlePairingUiState.Success(
                     currentState.camera.copy(username = newUsername, password = newPassword),
                 )
+                _credentialChangeState.value = CredentialChangeState.Success
+            } else {
+                val failure = result as ChangeRandomUserClient.Result.Failure
+                _credentialChangeState.value = CredentialChangeState.Failed(failure.detail ?: "Failed to set credentials")
             }
-            // On failure, leave the state unchanged -- user can proceed with random credentials
         }
     }
 
     fun reset() {
         pairingClient.cancel()
         _pairingState.value = BlePairingUiState.Idle
+        _credentialChangeState.value = CredentialChangeState.Idle
     }
 
     override fun onCleared() {
