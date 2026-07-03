@@ -16,6 +16,53 @@ threats are:
 It is explicitly **not** designed to resist a hostile camera vendor's cloud
 infrastructure, because it never talks to one.
 
+## Device defect: unremovable blank-password `admin` backdoor
+
+Reverse-engineering the vendor app and live-testing the target camera
+established that the device has an `admin` account with a **blank password
+that always authenticates over DVRIP on the LAN and cannot be secured**:
+
+- `admin`/(no password) returns `Ret:100` in every state tested, including a
+  reported factory-fresh state.
+- Every credential change applied to `admin` returns `Ret:100` but does not
+  change authentication -- verified live for `ModifyPassword` (msg 1040),
+  `ModifyUser` (msg 1484), and a `System.ExUserMap` write (msg 1040). The
+  device even generates a fresh `PasswordV2` blob from the written value, yet
+  `admin`/blank still logs in. The account's own metadata labels it
+  `Memo: "factory test account"`.
+
+So **anyone with LAN access has full DVRIP control with no credentials**,
+independent of configured passwords. This is classic Xiongmai default-account
+behaviour (the device family behind Mirai-era compromises) and is a firmware
+property, not fixable from a client.
+
+The real administrative account is a random-named account (e.g. `xkfu`,
+`Memo: "admin 's account"`) provisioned with a **per-device seed password**.
+That seed is only disclosed in the BLE provisioning ACK to the app that
+provisioned the device; a client that did not provision it (or that missed the
+ACK -- see below) cannot authenticate as the privileged account, and so cannot
+even attempt to disable the backdoor.
+
+Consequences for this app:
+
+- **Password change is intentionally not implemented** -- given the backdoor it
+  would be security theatre, and on this hardware it does not even change the
+  login. The change-password UI verifies by re-login and reports honestly when
+  a change does not take, rather than faking success.
+- **Username change** (`ModifyUser`) works but is cosmetic while the backdoor
+  stands.
+- The full plaintext password-change mechanism (`ModifyPassword` +
+  `System.ExUserMap` with the `u()` obfuscation) is documented in
+  `PASSWORD_CHANGE_RE.md`.
+
+### Provisioning ACK not captured
+
+This app's BLE pairing does not reliably receive the provisioning ACK carrying
+the camera's assigned random credentials -- the camera typically drops the BLE
+link as it joins Wi-Fi, and we fall back to `admin`/no-password. Surfacing the
+real credentials to the user would require reliably capturing that ACK
+(`ble/BleWifiProvisionCodec` parses it; reception is the open gap).
+
 ## Cryptography
 
 - No custom RSA or AES implementations. `crypto/DvripRsaPublicKey.kt` and
