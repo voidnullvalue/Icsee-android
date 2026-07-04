@@ -14,6 +14,7 @@ import com.voidnullvalue.icseelocal.ui.blepairing.BlePairingScreen
 import com.voidnullvalue.icseelocal.ui.cameralist.CameraListScreen
 import com.voidnullvalue.icseelocal.ui.devicemanagement.ConfigEditorScreen
 import com.voidnullvalue.icseelocal.ui.devicemanagement.ImageSettingsScreen
+import com.voidnullvalue.icseelocal.ui.devicemanagement.PlaybackBrowserScreen
 import com.voidnullvalue.icseelocal.ui.devicemanagement.DeviceManagementScreen
 import com.voidnullvalue.icseelocal.ui.diagnostics.DiagnosticsScreen
 import com.voidnullvalue.icseelocal.ui.live.LiveControlScreen
@@ -60,6 +61,7 @@ class MainActivity : ComponentActivity() {
                             cameraId = current.cameraId,
                             onOpenConfig = { name, label -> screen = Screen.ConfigEditor(current.cameraId, name, label) },
                             onOpenImageSettings = { screen = Screen.ImageSettings(current.cameraId) },
+                            onOpenRecordings = { screen = Screen.PlaybackBrowser(current.cameraId) },
                             onBack = { screen = Screen.LiveControl(current.cameraId) },
                         )
                         is Screen.ConfigEditor -> ConfigEditorScreen(
@@ -68,6 +70,9 @@ class MainActivity : ComponentActivity() {
                             onBack = { screen = Screen.DeviceManagement(current.cameraId) },
                         )
                         is Screen.ImageSettings -> ImageSettingsScreen(
+                            onBack = { screen = Screen.DeviceManagement(current.cameraId) },
+                        )
+                        is Screen.PlaybackBrowser -> PlaybackBrowserScreen(
                             onBack = { screen = Screen.DeviceManagement(current.cameraId) },
                         )
                         is Screen.BlePairing -> BlePairingScreen(

@@ -11,5 +11,6 @@ sealed class Screen {
     data class DeviceManagement(val cameraId: String) : Screen()
     data class ConfigEditor(val cameraId: String, val configName: String, val label: String) : Screen()
     data class ImageSettings(val cameraId: String) : Screen()
+    data class PlaybackBrowser(val cameraId: String) : Screen()
     data object BlePairing : Screen()
 }

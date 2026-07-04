@@ -48,6 +48,14 @@ enum class AdvancedConfig(val configName: String, val label: String) {
     RECORD("Record", "Recording schedule"),
 }
 
+/** One recorded clip returned by OPFileQuery (msg 1440). */
+data class RecordedFile(
+    val beginTime: String,
+    val endTime: String,
+    val fileName: String,
+    val sizeText: String,
+)
+
 data class DeviceManagementUiState(
     val connectionState: ConnectionState = ConnectionState.Disconnected,
     val systemInfo: SystemInfo? = null,
@@ -59,6 +67,9 @@ data class DeviceManagementUiState(
     val errorMessage: String? = null,
     val rebootRequested: Boolean = false,
     val passwordChangeInFlight: Boolean = false,
+    val formatRequested: Boolean = false,
+    val recordings: List<RecordedFile>? = null,
+    val recordingsQuerying: Boolean = false,
 )
 
 class DeviceManagementViewModel(application: Application) : AndroidViewModel(application) {
@@ -393,6 +404,97 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
 
     fun clearStatus() {
         _state.value = _state.value.copy(statusMessage = null, errorMessage = null)
+    }
+
+    fun requestFormat() { _state.value = _state.value.copy(formatRequested = true) }
+    fun cancelFormat() { _state.value = _state.value.copy(formatRequested = false) }
+
+    /**
+     * Formats the SD card via `OPStorageManager` (msg 1460). Body taken verbatim
+     * from the vendor's `DevStorageSettingActivity.U1()`
+     * (`Action:"Clear", Type:"Data"`). SerialNo/PartNo identify the disk/partition;
+     * 0/0 targets the (single) card on an IPC. Destructive -- gated behind a
+     * confirm dialog in the UI. Built from decompiled spec; not yet run live.
+     */
+    fun formatSdCard() {
+        val manager = sessionManager ?: return
+        val transport = manager.controlTransport ?: return
+        val channel = manager.commandChannel ?: return
+        val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(busy = true, formatRequested = false)
+            runCatching {
+                val json = buildJsonObject {
+                    put("Name", "OPStorageManager")
+                    put("OPStorageManager", buildJsonObject {
+                        put("Action", "Clear")
+                        put("Type", "Data")
+                        put("SerialNo", 0)
+                        put("PartNo", 0)
+                    })
+                    put("SessionID", "0x%08x".format(sid.toLong()))
+                }.toString()
+                val text = sendAndAwait(transport, channel, DvripMessageIds.STORAGE_MANAGER, DvripMessageIds.STORAGE_MANAGER + 1, json, timeoutMillis = 60000)
+                val ret = text?.let { Regex("\"Ret\"\\s*:\\s*(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+                if (ret == 100) _state.value = _state.value.copy(statusMessage = "SD card formatted")
+                else _state.value = _state.value.copy(errorMessage = "Format failed: Ret=$ret")
+            }.onFailure { _state.value = _state.value.copy(errorMessage = it.message ?: "Format failed") }
+            _state.value = _state.value.copy(busy = false)
+        }
+    }
+
+    /**
+     * Lists recorded clips for [date] via `OPFileQuery` (msg 1440). Request shape
+     * is the standard XM DVRIP form (BeginTime/EndTime/Channel/DriverTypeMask/
+     * Type/StreamType); the response is an `OPFileQuery` array of
+     * BeginTime/EndTime/FileName/FileLength. Built from decompiled spec; parsing
+     * is tolerant and needs live confirmation. In-app playback of a clip is not
+     * wired -- the DVRIP media-byte stream is the same one still unresolved for
+     * live view (see PROTOCOL_STATUS.md), so this browser lists what's recorded
+     * rather than streaming it.
+     */
+    fun queryRecordings(date: String) {
+        val manager = sessionManager ?: return
+        val transport = manager.controlTransport ?: return
+        val channel = manager.commandChannel ?: return
+        val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
+        val ch = camera?.channel ?: 0
+        viewModelScope.launch {
+            _state.value = _state.value.copy(recordingsQuerying = true, recordings = null, errorMessage = null)
+            runCatching {
+                val json = buildJsonObject {
+                    put("Name", "OPFileQuery")
+                    put("OPFileQuery", buildJsonObject {
+                        put("BeginTime", "$date 00:00:00")
+                        put("EndTime", "$date 23:59:59")
+                        put("Channel", ch)
+                        put("DriverTypeMask", "0x0000FFFF")
+                        put("Type", "h264")
+                        put("StreamType", "0x00000000")
+                    })
+                    put("SessionID", "0x%08x".format(sid.toLong()))
+                }.toString()
+                val text = sendAndAwait(transport, channel, DvripMessageIds.FILE_QUERY, DvripMessageIds.FILE_QUERY + 1, json, timeoutMillis = 15000)
+                val files = text?.let { parseRecordings(it) } ?: emptyList()
+                _state.value = _state.value.copy(recordings = files)
+            }.onFailure { _state.value = _state.value.copy(errorMessage = it.message ?: "Query failed", recordings = emptyList()) }
+            _state.value = _state.value.copy(recordingsQuerying = false)
+        }
+    }
+
+    private fun parseRecordings(responseText: String): List<RecordedFile> {
+        val root = runCatching { Json.parseToJsonElement(responseText) as? JsonObject }.getOrNull() ?: return emptyList()
+        val arr = (root["OPFileQuery"] as? kotlinx.serialization.json.JsonArray) ?: return emptyList()
+        return arr.mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            fun s(k: String) = o[k]?.jsonPrimitive?.content ?: ""
+            RecordedFile(
+                beginTime = s("BeginTime"),
+                endTime = s("EndTime"),
+                fileName = s("FileName"),
+                sizeText = s("FileLength"),
+            )
+        }
     }
 
     suspend fun getConfigMetadata(configName: String) = configChannel?.getCachedMetadata(configName)

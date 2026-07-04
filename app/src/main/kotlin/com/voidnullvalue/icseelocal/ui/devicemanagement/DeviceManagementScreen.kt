@@ -39,6 +39,7 @@ fun DeviceManagementScreen(
     cameraId: String,
     onOpenConfig: (configName: String, label: String) -> Unit,
     onOpenImageSettings: () -> Unit,
+    onOpenRecordings: () -> Unit,
     onBack: () -> Unit,
     viewModel: DeviceManagementViewModel = viewModel(),
 ) {
@@ -94,6 +95,13 @@ fun DeviceManagementScreen(
                 } else {
                     Text(storage.toString(), style = MaterialTheme.typography.bodySmall)
                 }
+                Row(Modifier.padding(top = 8.dp)) {
+                    Button(onClick = onOpenRecordings, modifier = Modifier.padding(end = 8.dp)) { Text("Recordings") }
+                    Button(
+                        onClick = { viewModel.requestFormat() },
+                        enabled = storage != null,
+                    ) { Text("Format card") }
+                }
             }
 
             // -- Friendly settings screens --
@@ -137,6 +145,9 @@ fun DeviceManagementScreen(
 
     if (state.rebootRequested) {
         RebootConfirmDialog(onConfirm = { viewModel.reboot() }, onDismiss = { viewModel.cancelReboot() })
+    }
+    if (state.formatRequested) {
+        FormatConfirmDialog(onConfirm = { viewModel.formatSdCard() }, onDismiss = { viewModel.cancelFormat() })
     }
     if (showPasswordDialog) {
         ChangePasswordDialog(
@@ -198,6 +209,26 @@ private fun RebootConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
                 )
                 Row {
                     Button(onClick = onConfirm, modifier = Modifier.padding(end = 8.dp)) { Text("Reboot") }
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FormatConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card {
+            Column(Modifier.padding(16.dp)) {
+                Text("Format SD card?", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "This permanently erases ALL recordings on the card. This cannot be undone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
+                )
+                Row {
+                    Button(onClick = onConfirm, modifier = Modifier.padding(end = 8.dp)) { Text("Erase everything") }
                     TextButton(onClick = onDismiss) { Text("Cancel") }
                 }
             }
