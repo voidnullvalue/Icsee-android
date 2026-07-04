@@ -74,6 +74,7 @@ Full evidence and the honest caveats live in [`PROTOCOL_STATUS.md`](PROTOCOL_STA
 ## Features
 
 - 📡 **LAN discovery** — UDP beacon probe + parsing, bounded window, multicast lock
+- 🌐 **VPN discovery** — unicast subnet sweep that validates DVRIP, for cameras reached over WireGuard/routed tunnels
 - 🔐 **Confirmed plaintext DVRIP-Web login** — Sofia hash, verified end-to-end
 - ♻️ **Session state machine** — keepalive + bounded-backoff reconnect
 - 🎮 **PTZ** — 8-direction press-and-hold pad, stop-on-release, adjustable speed, **presets** (tap-recall / hold-save)
@@ -87,6 +88,24 @@ Full evidence and the honest caveats live in [`PROTOCOL_STATUS.md`](PROTOCOL_STA
 - 🔓 **Reveal-password** toggles on every password field
 - 🌙 **Dark, touch-first** Jetpack Compose UI
 - 🩺 **Sanitized diagnostics** screen — never shows credentials or keys
+
+## Using over a VPN (WireGuard)
+
+The app works against a camera reached through a routed VPN (e.g. WireGuard,
+phone → home router), with two things to know:
+
+- **Discovery** — the normal LAN discovery uses a UDP **broadcast**, which does
+  not cross a routed tunnel. Use **"Scan subnet (VPN)"** on the camera list
+  instead: enter the camera's subnet (e.g. `192.168.88`) and it sweeps the
+  `/24` by unicast, keeping only hosts that return a valid DVRIP response. (A
+  plain port scan is unreliable here — some routers/VPN endpoints ACK
+  connections for the whole subnet, so the sweep validates the DVRIP protocol,
+  not just an open port.) Adding a camera **by IP** always works too.
+- **Reliability** — if the tunnel connects then goes idle, set
+  `PersistentKeepalive = 25` on the peer and exclude both the WireGuard app and
+  iCSee from Android battery optimization. For smooth RTSP video, lower the
+  client `MTU` to ~`1280` (WireGuard's overhead otherwise silently drops large
+  video packets). Make sure the peer's `AllowedIPs` includes the camera subnet.
 
 ## Build from source
 
