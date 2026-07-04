@@ -55,19 +55,36 @@ A real, building, testable application. Verified live against the target camera:
 | Push-to-talk | ✅ Verified **audible** | Non-obvious: OPTalk *Claim* (1434) returns `Ret: 100` but leaves the speaker shut — a plaintext OPTalk **`Start`** (1430) opens it, then G.711 A-law frames play out loud. |
 | BLE Wi-Fi provisioning | ✅ Verified on hardware | App scans, connects, sends Wi-Fi credentials over BLE, and the **camera joins the router**. It drops BLE before reporting its own login, so the app shows the factory `admin` / no-password. |
 | Keepalive / reconnect | ✅ Verified live | `1006` keepalive `Ret: 100`; bounded-backoff reconnect. |
+| PTZ presets | ✅ Verified live | `OPPTZControl` Set/Goto/Clear preset — `Ret: 100`. |
+| Device management | ✅ Verified live | SystemInfo, device time, reboot, and generic get/set of ~any named config (msg 1020/1042/1040). |
+| Username change | ✅ Verified live | `ModifyUser` (msg 1484) renames the account; re-login under the new name confirmed. |
+| Password change | ⛔ Not offered | Mechanism fully reverse-engineered (plaintext `ModifyPassword` + `System.ExUserMap`, see below) but the device has an **unremovable blank-`admin` LAN backdoor** that makes it moot. See [`SECURITY.md`](SECURITY.md). |
+| SD format / recordings list | 🟡 Built from spec | `OPStorageManager` format and `OPFileQuery` clip listing built from the decompiled vendor shapes; not yet confirmed against a live reply. Recorded-video *playback* is blocked by the same DVRIP media-byte gap as live view. |
 | LAN discovery | 🟡 Partial | Client probe frame byte-verified; beacon-response parsing implemented but not observed on this camera. |
 
 Full evidence and the honest caveats live in [`PROTOCOL_STATUS.md`](PROTOCOL_STATUS.md).
+
+> **Device security note:** this camera exposes an `admin` account with a blank
+> password that always authenticates over DVRIP on the LAN and cannot be
+> secured — configured passwords are ignored for it. This is a firmware defect
+> (classic Xiongmai default account), documented with evidence in
+> [`SECURITY.md`](SECURITY.md). The app therefore does not pretend to "secure"
+> the device.
 
 ## Features
 
 - 📡 **LAN discovery** — UDP beacon probe + parsing, bounded window, multicast lock
 - 🔐 **Confirmed plaintext DVRIP-Web login** — Sofia hash, verified end-to-end
 - ♻️ **Session state machine** — keepalive + bounded-backoff reconnect
-- 🎮 **PTZ** — 8-direction press-and-hold pad, stop-on-release, adjustable speed
-- 🎥 **Live video** — RTSP (H.265 + PCMA) via `androidx.media3` / `PlayerView`, tap-to-fullscreen
+- 🎮 **PTZ** — 8-direction press-and-hold pad, stop-on-release, adjustable speed, **presets** (tap-recall / hold-save)
+- 🎥 **Live video** — RTSP (H.265 + PCMA) via `androidx.media3` / `PlayerView`; **full-screen drag-to-steer** PTZ
 - 🎙️ **Push-to-talk** — dedicated talk connection, OPTalk Claim + Start handshake, G.711 A-law upstream
-- 📶 **BLE pairing / Wi-Fi provisioning** — scanner + GATT choreography matched to the factory app
+- 📶 **BLE pairing / Wi-Fi provisioning** — scanner + GATT choreography matched to the factory app; fast connection interval to better capture the provisioning ACK
+- 🛠️ **Device management** — device info, time, reboot, **username change**, and a generic get/set editor for any named DVRIP config
+- 📖 **Plain-English config docs** — cryptic protocol keys shown with friendly labels + descriptions + decoded on/off values
+- 🖼️ **Friendly Image settings** — flip / mirror / gain / day-night as real controls instead of raw hex
+- 💾 **SD card** — status, format (confirm-gated), and a recorded-clip browser
+- 🔓 **Reveal-password** toggles on every password field
 - 🌙 **Dark, touch-first** Jetpack Compose UI
 - 🩺 **Sanitized diagnostics** screen — never shows credentials or keys
 
@@ -89,11 +106,13 @@ for the aapt2-under-QEMU toolchain. Live-probe credentials go in the gitignored
 
 ```
 app/src/main/kotlin/com/voidnullvalue/icseelocal/
-  ui/          Compose screens + ViewModels (camera list, settings, live, diagnostics, BLE) + theme
+  ui/          Compose screens + ViewModels (camera list, settings, live, diagnostics, BLE,
+               device management, generic config editor, image settings, recordings) + theme
   model/       CameraDescriptor, ConnectionState state machine
   discovery/   UDP beacon probe/parsing, multicast lock
   dvrip/       20-byte header framing, frame assembler, TCP transport, message-id catalog
   crypto/      Sofia password hash, RSA public-key parsing, AES SessionCrypto
+  config/      Generic named-config get/set channel, field constraint metadata, field docs
   session/     Login negotiator, session manager, keepalive, reconnect backoff, command channel
   ptz/         OPPTZControl JSON builder, press-and-hold controller
   video/       RTSP player, media stream reassembly, codec probe, snapshot capture
@@ -108,9 +127,10 @@ app/src/main/kotlin/com/voidnullvalue/icseelocal/
 |---|---|
 | [`PROTOCOL_NOTES.md`](PROTOCOL_NOTES.md) | The evidence — pcap + live findings, with exact bytes |
 | [`PROTOCOL_STATUS.md`](PROTOCOL_STATUS.md) | Feature-by-feature verified/blocked status |
+| [`PASSWORD_CHANGE_RE.md`](PASSWORD_CHANGE_RE.md) | How credential change works on this firmware (plaintext `ModifyPassword` + `System.ExUserMap`) and why the backdoor makes it moot |
 | [`BUILDING_IN_PROOT.md`](BUILDING_IN_PROOT.md) | ARM64 toolchain setup details |
 | [`TESTING.md`](TESTING.md) | Unit tests + opt-in live hardware tests |
-| [`SECURITY.md`](SECURITY.md) | Threat model, crypto/credential-storage choices |
+| [`SECURITY.md`](SECURITY.md) | Threat model, the blank-`admin` backdoor finding, crypto/credential-storage choices |
 
 ## What's deliberately not here
 

@@ -22,18 +22,32 @@ This document tracks which protocol features have been live-confirmed against a 
 - Device info screen (SystemInfo)
 - Time query (OPTimeQuery)
 - Reboot device (OPMachine)
-- Change device password (ModifyPassword)
-- BLE pairing credential setting (ChangeRandomUser) — code ready, needs BLE integration
+- Username change (`ModifyUser`, msg 1484) — **live-confirmed**: rename applies,
+  re-login under the new name succeeds. User list via `GetAllUser` (msg 1472).
+- Change device password — **not offered.** Fully reverse-engineered (plaintext
+  `ModifyPassword` msg 1040 + a `System.ExUserMap` write whose Password uses the
+  vendor `u()` obfuscation = `"0001"+base64(pw)` with the first two chars
+  swapped; see PASSWORD_CHANGE_RE.md). Left unimplemented because the device has
+  an unremovable blank-`admin` LAN backdoor (SECURITY.md) that makes it moot.
+- BLE pairing credential setting (ChangeRandomUser, msg 1660) — client ready;
+  reliant on capturing the provisioning ACK (BLE now requests the fastest
+  connection interval to improve capture).
 
 ## Tier 2: Advanced Settings (Complete via Generic Editor)
-- Image settings (Camera.Param / Camera.ParamEx)
+- Image settings (Camera.Param / Camera.ParamEx) — plus a **friendly Image
+  settings screen** (flip/mirror/gain/day-night as real controls).
 - Motion detection (Detect.MotionDetect)
 - Recording config (Record / ExtRecord)
+- **Field documentation layer**: cryptic keys shown with friendly labels +
+  descriptions + decoded on/off values in the generic editor.
 
-## Tier 3: Advanced Operations (Not Yet Implemented)
-- SD card format (OPStorageManager)
-- Playback (OPPlayBack / OPSCalendar / OPFileQuery)
-- PTZ presets (OPPtzLocate)
+## Tier 3: Advanced Operations
+- PTZ presets (`OPPTZControl` Set/Goto/Clear, msg 1400) — **live-confirmed** `Ret:100`.
+- SD card format (`OPStorageManager`, msg 1460, `Action:Clear/Type:Data`) —
+  built from decompiled spec, confirm-gated; **not yet run live** (destructive).
+- Recorded-clip browser (`OPFileQuery`, msg 1440) — built from decompiled spec;
+  response parsing **not yet confirmed** against a live reply. Recorded-video
+  *playback* is blocked by the same DVRIP media-byte gap as live view (below).
 
 ## Key Design Patterns
 - **Race-safe request/response**: Subscribe to DvripTransport.incomingFrames BEFORE sending (matches DvripLoginNegotiator)
