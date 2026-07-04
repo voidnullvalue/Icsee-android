@@ -6,18 +6,24 @@ import com.voidnullvalue.icseelocal.dvrip.DvripMessageIds
 import com.voidnullvalue.icseelocal.dvrip.DvripPayloads
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Passive-with-a-nudge LAN discovery: broadcasts the client discovery probe
@@ -92,9 +98,85 @@ class CameraDiscoveryClient(
         seen.values.toList()
     }
 
+    // A minimal DVRIP login request (msg 1000). Sent purely to elicit the
+    // camera's login *response* (msg 1001); the credentials are irrelevant --
+    // the camera answers 1001 regardless of whether they're valid, and even
+    // while account-locked (Ret:205), which still counts as "a camera is here".
+    private val loginProbeBytes: ByteArray by lazy {
+        val json = """{"EncryptType":"MD5","LoginType":"DVRIP-Web","PassWord":"","UserName":"admin"}"""
+        DvripFrame.of(0u, 0u, DvripMessageIds.LOGIN_REQUEST, DvripPayloads.encodeJson(json), type = 1).encode()
+    }
+
+    /**
+     * Discovery that works across a routed VPN (e.g. WireGuard), where the
+     * broadcast probe of [discoverOnce] cannot reach the camera LAN: sweep a
+     * `/24` with bounded-concurrency **unicast** probes on the DVRIP port.
+     *
+     * A plain TCP connect is NOT sufficient -- some routers/VPN endpoints ACK
+     * connections for the whole subnet (every IP looks "open", confirmed live),
+     * which would surface hundreds of phantom hosts. So each host must return a
+     * **valid DVRIP login response** (msg 1001, 0xFF magic) to count -- a
+     * discriminator the catch-all can't fake (it forwards no real bytes).
+     * Surfaced beacons are IP-only (no MAC/serial; that rides the UDP beacon
+     * path, which doesn't answer over TCP here). One login probe per host per
+     * sweep -- lockout-safe for a real camera.
+     *
+     * @param subnetPrefix the first three octets, e.g. "192.168.88"
+     */
+    suspend fun discoverSweep(
+        subnetPrefix: String,
+        hostRange: IntRange = 1..254,
+        tcpPort: Int = 34567,
+    ): List<DiscoveryBeacon> = withContext(Dispatchers.IO) {
+        _results.value = emptyList()
+        val found = ConcurrentHashMap<String, DiscoveryBeacon>()
+        val gate = Semaphore(SWEEP_CONCURRENCY)
+        coroutineScope {
+            for (i in hostRange) {
+                launch {
+                    gate.withPermit {
+                        if (!currentCoroutineContext().isActive) return@withPermit
+                        val ip = "$subnetPrefix.$i"
+                        if (isDvripHost(ip, tcpPort)) {
+                            found[ip] = DiscoveryBeacon(
+                                hostIp = ip, hostName = ip, httpPort = 0, mac = "", pid = "",
+                                serialNumber = "", sslPort = 0, tcpPort = tcpPort, udpPort = 0, version = "",
+                            )
+                            _results.value = found.values.sortedBy { it.hostIp }
+                        }
+                    }
+                }
+            }
+        }
+        found.values.sortedBy { it.hostIp }
+    }
+
+    /** True only if [ip]:[port] answers a login probe with a valid DVRIP frame (0xFF magic, msg 1001). */
+    private fun isDvripHost(ip: String, port: Int): Boolean = runCatching {
+        Socket().use { s ->
+            s.connect(InetSocketAddress(ip, port), TCP_KNOCK_TIMEOUT_MILLIS)
+            s.soTimeout = DVRIP_READ_TIMEOUT_MILLIS
+            s.getOutputStream().apply { write(loginProbeBytes); flush() }
+            val header = ByteArray(DvripHeader.HEADER_LEN)
+            val ins = s.getInputStream()
+            var read = 0
+            while (read < header.size) {
+                val n = ins.read(header, read, header.size - read)
+                if (n < 0) break
+                read += n
+            }
+            read >= DvripHeader.HEADER_LEN &&
+                (header[0].toInt() and 0xFF) == DvripHeader.MAGIC &&
+                DvripHeader.decode(header).messageId == DvripMessageIds.LOGIN_RESPONSE
+        }
+    }.getOrDefault(false)
+
     companion object {
         const val DISCOVERY_PORT = 34569
         const val DEFAULT_WINDOW_MILLIS = 6000L
+        private const val SWEEP_CONCURRENCY = 32
+        private const val TCP_KNOCK_TIMEOUT_MILLIS = 800
+        private const val DVRIP_READ_TIMEOUT_MILLIS = 1500
         private const val SOCKET_POLL_TIMEOUT_MILLIS = 500
         private const val MAX_DATAGRAM_SIZE = 8192
         private const val BROADCAST_ADDRESS = "255.255.255.255"

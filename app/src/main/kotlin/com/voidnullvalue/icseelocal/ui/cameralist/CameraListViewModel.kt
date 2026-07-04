@@ -49,6 +49,29 @@ class CameraListViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /**
+     * Broadcast discovery can't cross a routed VPN (WireGuard). This sweeps a
+     * `/24` with unicast TCP knocks instead, which does. [prefix] is the first
+     * three octets, e.g. "192.168.88".
+     */
+    fun sweepSubnet(prefix: String) {
+        if (_discovering.value) return
+        val clean = prefix.trim().removeSuffix(".")
+        if (!clean.matches(Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}"""))) return
+        viewModelScope.launch {
+            _discovering.value = true
+            try {
+                _discovered.value = discoveryClient.discoverSweep(clean)
+            } finally {
+                _discovering.value = false
+            }
+        }
+    }
+
+    /** First three octets of an already-saved camera, to prefill the sweep field. */
+    fun suggestedSubnet(): String =
+        savedCameras.value.firstOrNull()?.host?.substringBeforeLast('.', "")?.takeIf { it.count { c -> c == '.' } == 2 } ?: ""
+
     fun deleteCamera(id: String) {
         viewModelScope.launch { store.delete(id) }
     }
