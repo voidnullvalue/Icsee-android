@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.voidnullvalue.icseelocal.config.ConfigFieldDocs
 import com.voidnullvalue.icseelocal.config.ConfigMetadataCache
 
 /**
@@ -59,29 +60,52 @@ fun JsonEditorNode(
         }
         is EditableJson.Prim -> {
             var text by node.text
+            val doc = ConfigFieldDocs.forKey(name)
             val hint = metadata?.fields?.get(pathPrefix)?.hint() ?: ""
-            val labelText = if (hint.isNotEmpty()) "$name $hint" else name
+            // Prefer the friendly label; keep the raw key in parentheses so it's
+            // still identifiable, and append the inferred-range hint.
+            val display = doc?.label ?: name
+            val labelText = buildString {
+                append(display)
+                if (doc != null) append(" ($name)")
+                if (hint.isNotEmpty()) append(" $hint")
+            }
+            // If we know what the stored value means, show it (e.g. "0x00000001 -> On").
+            val decoded = doc?.values?.get(text)
 
             if (node.kind == EditableJson.Prim.Kind.BOOLEAN) {
-                Row(Modifier.fillMaxWidth().padding(start = indent, top = 2.dp, bottom = 2.dp)) {
-                    Checkbox(checked = text.toBooleanStrictOrNull() ?: false, onCheckedChange = { text = it.toString() })
-                    Text(labelText, modifier = Modifier.padding(top = 12.dp, start = 4.dp))
+                Column(Modifier.padding(start = indent, top = 2.dp, bottom = 2.dp)) {
+                    Row(Modifier.fillMaxWidth()) {
+                        Checkbox(checked = text.toBooleanStrictOrNull() ?: false, onCheckedChange = { text = it.toString() })
+                        Text(labelText, modifier = Modifier.padding(top = 12.dp, start = 4.dp))
+                    }
+                    doc?.description?.let {
+                        Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+                    }
                 }
             } else {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    label = { Text(labelText, fontSize = 12.sp) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = when (node.kind) {
-                            EditableJson.Prim.Kind.INT, EditableJson.Prim.Kind.LONG -> KeyboardType.Number
-                            EditableJson.Prim.Kind.DOUBLE -> KeyboardType.Decimal
-                            else -> KeyboardType.Text
-                        },
-                    ),
-                    modifier = Modifier.fillMaxWidth().padding(start = indent, top = 2.dp, bottom = 2.dp),
-                )
+                Column(Modifier.fillMaxWidth().padding(start = indent, top = 2.dp, bottom = 2.dp)) {
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        label = { Text(labelText, fontSize = 12.sp) },
+                        supportingText = if (decoded != null) {
+                            { Text("= $decoded", fontSize = 11.sp) }
+                        } else null,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = when (node.kind) {
+                                EditableJson.Prim.Kind.INT, EditableJson.Prim.Kind.LONG -> KeyboardType.Number
+                                EditableJson.Prim.Kind.DOUBLE -> KeyboardType.Decimal
+                                else -> KeyboardType.Text
+                            },
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    doc?.description?.let {
+                        Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, top = 1.dp))
+                    }
+                }
             }
         }
     }

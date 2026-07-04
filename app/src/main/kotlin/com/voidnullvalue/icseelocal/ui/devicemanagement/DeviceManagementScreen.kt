@@ -38,6 +38,7 @@ import kotlinx.serialization.json.jsonPrimitive
 fun DeviceManagementScreen(
     cameraId: String,
     onOpenConfig: (configName: String, label: String) -> Unit,
+    onOpenImageSettings: () -> Unit,
     onBack: () -> Unit,
     viewModel: DeviceManagementViewModel = viewModel(),
 ) {
@@ -92,6 +93,15 @@ fun DeviceManagementScreen(
                     Text("No card detected, or not loaded yet", style = MaterialTheme.typography.bodySmall)
                 } else {
                     Text(storage.toString(), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            // -- Friendly settings screens --
+            SectionCard(title = "Settings") {
+                val imageAvailable = state.configValues.containsKey("Camera.Param") ||
+                    state.configValues.containsKey("Camera.ParamEx")
+                Button(onClick = onOpenImageSettings, enabled = imageAvailable) {
+                    Text(if (imageAvailable) "Image settings" else "Image settings (not available)")
                 }
             }
 
