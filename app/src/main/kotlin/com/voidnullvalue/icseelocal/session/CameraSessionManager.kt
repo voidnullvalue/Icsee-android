@@ -32,6 +32,8 @@ class CameraSessionManager(
     private val loginNegotiator: LoginNegotiator = DvripLoginNegotiator(),
     private val reconnectBackoff: ReconnectBackoff = ReconnectBackoff(),
     private val maxAutoReconnectAttempts: Int = 5,
+    private val loginRateLimitWindowMillis: Long = 10 * 60_000L,
+    private val loginRateLimitMaxAttempts: Int = 6,
 ) {
     private val ownerJob = SupervisorJob()
     private val scope = CoroutineScope(ownerJob + Dispatchers.IO)
@@ -55,6 +57,17 @@ class CameraSessionManager(
     private var keepalive: KeepaliveTask? = null
     private var connectJob: Job? = null
     private var reconnectAttempt = 0
+
+    // maxAutoReconnectAttempts only bounds one *burst* -- it resets to 0 the moment a
+    // reconnect succeeds (see attemptConnect below), so a link that flaps for hours
+    // (flaky wifi, or a phone hopping WireGuard on and off while away from home) can
+    // still rack up an unbounded number of real logins over the life of this manager,
+    // one burst at a time. Each login is legitimate (right credentials), but this
+    // camera's firmware appears to count login *rate*, not just failures, toward its
+    // Ret:205 temporary lockout. So track every attempt (manual or automatic) in a
+    // rolling window and stop trying altogether -- not just reset the burst counter --
+    // once that rate looks like what trips the lockout.
+    private val recentLoginAttempts = ArrayDeque<Long>()
 
     /** Read-only access to the control connection's transport for diagnostics (byte counters, last message id, etc). */
     val controlTransport: DvripTransport? get() = transport
@@ -91,6 +104,17 @@ class CameraSessionManager(
 
     private suspend fun attemptConnect(credentials: CameraCredentials, isManual: Boolean) {
         transition(ConnectionState.Connecting)
+        if (loginRateLimitTripped()) {
+            transition(
+                ConnectionState.Failed(
+                    "Stopped automatically: $loginRateLimitMaxAttempts+ login attempts in the last " +
+                        "${loginRateLimitWindowMillis / 60_000} minutes (usually a flaky connection to the " +
+                        "camera). Repeated logins can trip the camera's own Ret:205 lockout, so this app " +
+                        "stops rather than keep hammering it -- wait a few minutes, then tap Reconnect.",
+                ),
+            )
+            return
+        }
         val t = DvripTransport(host, port, sequence = sessionSequence)
         try {
             t.connect()
@@ -138,6 +162,16 @@ class CameraSessionManager(
                 scheduleReconnect(credentials, reason = e.message ?: e.toString())
             }
         }
+    }
+
+    /** Records this attempt and reports whether the rolling window is over the limit. */
+    private fun loginRateLimitTripped(): Boolean {
+        val now = System.currentTimeMillis()
+        recentLoginAttempts.addLast(now)
+        while (recentLoginAttempts.isNotEmpty() && now - recentLoginAttempts.first() > loginRateLimitWindowMillis) {
+            recentLoginAttempts.removeFirst()
+        }
+        return recentLoginAttempts.size > loginRateLimitMaxAttempts
     }
 
     private fun authFailureReason(e: LoginNegotiationBlockedException): String =

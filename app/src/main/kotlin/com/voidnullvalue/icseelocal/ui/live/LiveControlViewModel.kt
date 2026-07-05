@@ -45,6 +45,14 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     // session.
     private var wiredSessionId: UInt? = null
 
+    // Set in onStop() right before the session is torn down, based on whether it was
+    // actually connected/connecting at that moment -- NOT set for a session that was
+    // already Failed (e.g. a real credential rejection). Otherwise resuming on every
+    // foreground would silently retry a login that's known to be rejected, once per
+    // app open, which is a smaller version of the same "spamming auth" problem this
+    // background teardown is meant to fix. See onStop/onStart below.
+    private var resumeSessionOnForeground = false
+
     // Real video: RTSP (confirmed live, see PROTOCOL_NOTES.md "RTSP video --
     // LIVE CONFIRMED"). videoController above (DVRIP OPMonitor) is kept
     // running for stats/diagnostics -- its media-byte gap is still open,
@@ -229,6 +237,40 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         // App lost foreground: stop anything physically/audibly active on the camera.
         ptzController?.onForegroundLost()
         stopTalk()
+
+        // The DVRIP session's keepalive keeps running even while backgrounded (this
+        // ViewModel/its coroutine scope survive until onCleared, not onStop), so on a
+        // flaky link -- or a phone hopping on/off WireGuard while out of the house --
+        // a session left running for hours in the background can rack up an unbounded
+        // number of real relogins, one per keepalive hiccup (see CameraSessionManager's
+        // reconnect-burst reset and the new rolling-window rate limit it now enforces).
+        // There's nothing to show the user while backgrounded anyway, so just tear the
+        // session down here and reconnect fresh on the next onStart -- that bounds the
+        // whole "away from home" window to zero login attempts instead of however many
+        // the network flapped through.
+        val state = sessionManager?.state?.value
+        resumeSessionOnForeground = state is ConnectionState.Authenticated ||
+            state is ConnectionState.Streaming ||
+            state is ConnectionState.Reconnecting ||
+            state is ConnectionState.Connecting ||
+            state is ConnectionState.NegotiatingCrypto ||
+            state is ConnectionState.Authenticating
+        sessionManager?.disconnect()
+    }
+
+    override fun onStart(owner: LifecycleOwner) {
+        if (!resumeSessionOnForeground) return
+        resumeSessionOnForeground = false
+        val found = _camera.value ?: return
+        val manager = sessionManager ?: return
+        viewModelScope.launch {
+            val credentials = try {
+                store.credentialsFor(found.id) ?: CameraCredentials("", "")
+            } catch (e: Exception) {
+                CameraCredentials("", "")
+            }
+            manager.connect(credentials)
+        }
     }
 
     @UnstableApi
