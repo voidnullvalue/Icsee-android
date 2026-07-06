@@ -86,7 +86,16 @@ class CameraSessionManager(
 
     /** Manual connect / manual reconnect entry point (also used by the UI's reconnect button). */
     fun connect(credentials: CameraCredentials) {
-        connectJob?.cancel()
+        // A manual connect can arrive in ANY state -- notably Authenticated: the
+        // device-management screen reconnects the live session right after an
+        // in-session password/username change, and the UI's reconnect button can be
+        // tapped while still connected. attemptConnect opens with a transition to
+        // Connecting, which the state machine only permits from Disconnected/
+        // Reconnecting/Failed -- entering it straight from Authenticated (or
+        // Streaming/NegotiatingCrypto/Authenticating) throws. So tear any existing
+        // session down to a clean Disconnected baseline first; from there the
+        // Connecting transition is always legal.
+        disconnect()
         reconnectAttempt = 0
         connectJob = scope.launch { attemptConnect(credentials, isManual = true) }
     }
@@ -115,6 +124,22 @@ class CameraSessionManager(
             )
             return
         }
+        // Each attemptConnect establishes a *new* DVRIP session (new login, new
+        // SessionID from the camera). Its sequence must therefore start at 0 --
+        // the value the very first login is live-confirmed to be accepted at
+        // (Ret:100). sessionSequence is shared with (and continued by) the
+        // video/talk connections, so it climbs for the whole life of this
+        // manager as keepalives and commands consume it; if we DIDN'T reset it
+        // here, a reconnect after some uptime would send its login frame with a
+        // large, stale sequence continuing the dead session's counter, and the
+        // camera rejects a session-0 login that doesn't begin at 0 with Ret:203.
+        // That is exactly the "works right after provisioning, then goes Ret:203
+        // x minutes later" symptom -- the longer the session ran (more keepalives
+        // = higher counter) before the reconnect, the more wrong the login's
+        // sequence. Reset to 0 so every reconnect's login matches the confirmed
+        // first-login frame; video/talk (rebuilt on Authenticated) then continue
+        // from wherever the counter has advanced to by then.
+        sessionSequence.set(0)
         val t = DvripTransport(host, port, sequence = sessionSequence)
         try {
             t.connect()
