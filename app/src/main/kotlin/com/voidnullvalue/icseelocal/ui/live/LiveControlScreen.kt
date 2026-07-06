@@ -320,7 +320,6 @@ private fun dragToPtz(dx: Float, dy: Float): PtzCommand? {
 
 private val ConnectionState.needsAttention: Boolean
     get() = this is ConnectionState.Failed ||
-        this is ConnectionState.Reconnecting ||
         this is ConnectionState.Disconnected
 
 @Composable
@@ -359,7 +358,6 @@ private fun ReconnectBanner(state: ConnectionState, onReconnect: () -> Unit) {
         Text(
             when (state) {
                 is ConnectionState.Failed -> "Failed: ${state.reason}"
-                is ConnectionState.Reconnecting -> "Reconnecting (attempt ${state.attempt})…"
                 else -> state.label
             },
             color = MaterialTheme.colorScheme.onErrorContainer,

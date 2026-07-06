@@ -12,15 +12,15 @@ class CameraSessionRegistryTest {
 
     private fun closedPort(): Int = ServerSocket(0).use { it.localPort }
 
-    // Managers point at a closed port with zero auto-reconnects, so any connect fails
-    // fast to Failed and never loops -- these tests exercise the registry's
-    // ref-counting/linger, not the network.
+    // Managers point at a closed port, so any connect fails fast to Failed (there is
+    // no auto-reconnect) -- these tests exercise the registry's ref-counting/linger,
+    // not the network.
     private fun trackingFactory(
         createdManagers: MutableList<CameraSessionManager>,
         limiters: MutableList<LoginRateLimiter>,
     ): (String, Int, LoginRateLimiter) -> CameraSessionManager = { host, port, limiter ->
         limiters += limiter
-        CameraSessionManager(host, port, maxAutoReconnectAttempts = 0, loginRateLimiter = limiter)
+        CameraSessionManager(host, port, loginRateLimiter = limiter)
             .also { createdManagers += it }
     }
 

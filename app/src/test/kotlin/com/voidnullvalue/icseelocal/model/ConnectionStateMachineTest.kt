@@ -36,7 +36,7 @@ class ConnectionStateMachineTest {
     }
 
     @Test
-    fun `any active state can fail or move to reconnecting`() {
+    fun `any active state can fail`() {
         val activeStates = listOf(
             ConnectionState.Connecting,
             ConnectionState.NegotiatingCrypto,
@@ -50,13 +50,7 @@ class ConnectionStateMachineTest {
     }
 
     @Test
-    fun `failed and reconnecting can restart via connecting`() {
+    fun `failed can restart via connecting`() {
         assertTrue(ConnectionStateMachine.canTransition(ConnectionState.Failed("x"), ConnectionState.Connecting))
-        assertTrue(ConnectionStateMachine.canTransition(ConnectionState.Reconnecting(1, 0, "x"), ConnectionState.Connecting))
-    }
-
-    @Test
-    fun `disconnected cannot go directly to reconnecting`() {
-        assertFalse(ConnectionStateMachine.canTransition(ConnectionState.Disconnected, ConnectionState.Reconnecting(1, 0, "x")))
     }
 }

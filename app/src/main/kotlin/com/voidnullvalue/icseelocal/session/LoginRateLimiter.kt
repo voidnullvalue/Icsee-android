@@ -11,9 +11,11 @@ package com.voidnullvalue.icseelocal.session
  *  - a **minimum spacing** between any two logins ([minIntervalMillis]).
  *
  * The spacing limit is the one that actually matters against a lockout: without it,
- * a single socket drop's reconnect burst (see [ReconnectBackoff]) could fire the
- * whole window's worth of logins back to back in ~30s, which is exactly the shape
- * the camera locks on. Both limits have to span every code path that can log in
+ * a run of quick reconnects/retries could fire the whole window's worth of logins
+ * back to back in a few seconds, which is exactly the shape the camera locks on.
+ * (The app no longer auto-reconnects at all -- see CameraSessionManager -- but this
+ * spacing floor still guards manual reconnect mashing and any future retry path.)
+ * Both limits have to span every code path that can log in
  * (live view, device management, credential-change verification) AND survive a
  * [CameraSessionManager] being torn down and rebuilt -- which is why this is a
  * standalone object [CameraSessionRegistry] keeps one of per camera for the life of

@@ -37,9 +37,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest
+
       - name: Build release APK
-        # Tests are skipped here so a release is never blocked by the known-flaky
-        # DvripTransport timing test; correctness tests run in the CI workflow.
         run: ./gradlew assembleRelease -x test
 
       - name: Name the artifact

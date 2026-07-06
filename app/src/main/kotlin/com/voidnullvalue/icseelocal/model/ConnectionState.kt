@@ -1,9 +1,11 @@
 package com.voidnullvalue.icseelocal.model
 
 /**
- * Session state machine, per the task brief: Disconnected -> Connecting ->
- * NegotiatingCrypto -> Authenticating -> Authenticated -> Streaming, with
- * Reconnecting/Failed reachable from any active state.
+ * Session state machine: Disconnected -> Connecting -> NegotiatingCrypto ->
+ * Authenticating -> Authenticated -> Streaming, with Failed reachable from any
+ * active state. There is no Reconnecting state: the app does not auto-reconnect
+ * (see CameraSessionManager) -- a dropped link goes to Failed and waits for a
+ * deliberate reconnect.
  */
 sealed class ConnectionState {
     data object Disconnected : ConnectionState()
@@ -12,7 +14,6 @@ sealed class ConnectionState {
     data object Authenticating : ConnectionState()
     data class Authenticated(val sessionId: UInt, val aliveIntervalSeconds: Int) : ConnectionState()
     data class Streaming(val sessionId: UInt, val aliveIntervalSeconds: Int) : ConnectionState()
-    data class Reconnecting(val attempt: Int, val nextRetryAtMillis: Long, val reason: String) : ConnectionState()
     data class Failed(val reason: String) : ConnectionState()
 
     val label: String
@@ -23,7 +24,6 @@ sealed class ConnectionState {
             is Authenticating -> "Authenticating"
             is Authenticated -> "Authenticated"
             is Streaming -> "Streaming"
-            is Reconnecting -> "Reconnecting"
             is Failed -> "Failed"
         }
 }
@@ -42,18 +42,16 @@ object ConnectionStateMachine {
         is ConnectionState.Authenticating -> "Authenticating"
         is ConnectionState.Authenticated -> "Authenticated"
         is ConnectionState.Streaming -> "Streaming"
-        is ConnectionState.Reconnecting -> "Reconnecting"
         is ConnectionState.Failed -> "Failed"
     }
 
     private val allowed: Map<String, Set<String>> = mapOf(
         "Disconnected" to setOf("Connecting"),
-        "Connecting" to setOf("NegotiatingCrypto", "Authenticating", "Failed", "Reconnecting", "Disconnected"),
-        "NegotiatingCrypto" to setOf("Authenticating", "Failed", "Reconnecting", "Disconnected"),
-        "Authenticating" to setOf("Authenticated", "Failed", "Reconnecting", "Disconnected"),
-        "Authenticated" to setOf("Streaming", "Reconnecting", "Disconnected", "Failed"),
-        "Streaming" to setOf("Reconnecting", "Disconnected", "Failed", "Authenticated"),
-        "Reconnecting" to setOf("Connecting", "Failed", "Disconnected"),
+        "Connecting" to setOf("NegotiatingCrypto", "Authenticating", "Failed", "Disconnected"),
+        "NegotiatingCrypto" to setOf("Authenticating", "Failed", "Disconnected"),
+        "Authenticating" to setOf("Authenticated", "Failed", "Disconnected"),
+        "Authenticated" to setOf("Streaming", "Disconnected", "Failed"),
+        "Streaming" to setOf("Disconnected", "Failed", "Authenticated"),
         "Failed" to setOf("Connecting", "Disconnected"),
     )
 

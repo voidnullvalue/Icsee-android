@@ -9,16 +9,25 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Owns the connection lifecycle for one camera: state machine transitions,
- * keepalive, and bounded-backoff reconnect. Single owner per camera
- * connection -- create one instance per active camera, not shared.
+ * Owns the connection lifecycle for one camera: state machine transitions and
+ * keepalive. Single owner per camera connection -- create one instance per active
+ * camera, not shared.
+ *
+ * **No automatic reconnect.** The session is established once (when a screen that
+ * needs it comes into view) and, if the link drops, transitions to Failed and
+ * stays there until the user explicitly reconnects. Auto-reconnect was removed
+ * deliberately: each reconnect is a real DVRIP login, remote access (e.g. over a
+ * VPN) is not a working scenario for this app anyway, and an unattended
+ * reconnect loop firing logins at an unreachable/flaky camera is exactly what
+ * tripped its Ret:205 login-rate lockout. Live video (RTSP) is independent of this
+ * control session and keeps playing across any drop, so there is little cost to
+ * waiting for a deliberate reconnect.
  *
  * Login is live-verified end-to-end against the target camera (see
  * [DvripLoginNegotiator] / PROTOCOL_NOTES.md "Login -- LIVE AUTHENTICATION
@@ -30,11 +39,6 @@ class CameraSessionManager(
     private val host: String,
     private val port: Int,
     private val loginNegotiator: LoginNegotiator = DvripLoginNegotiator(),
-    private val reconnectBackoff: ReconnectBackoff = ReconnectBackoff(),
-    // Deliberately few: with the slow backoff above, 3 attempts already span several
-    // minutes. Each is a real login, so we bound how many a single drop can spend
-    // before giving up and waiting for the user (rather than machine-gunning Ret:205).
-    private val maxAutoReconnectAttempts: Int = 3,
     // Shared, per-camera login budget. Defaults to a private one for standalone use
     // (tests, a manager built directly), but CameraSessionRegistry injects a single
     // instance shared across every manager it builds for the same camera so the
@@ -62,7 +66,6 @@ class CameraSessionManager(
     private var transport: DvripTransport? = null
     private var keepalive: KeepaliveTask? = null
     private var connectJob: Job? = null
-    private var reconnectAttempt = 0
 
     /** Read-only access to the control connection's transport for diagnostics (byte counters, last message id, etc). */
     val controlTransport: DvripTransport? get() = transport
@@ -85,14 +88,12 @@ class CameraSessionManager(
         // device-management screen reconnects the live session right after an
         // in-session password/username change, and the UI's reconnect button can be
         // tapped while still connected. attemptConnect opens with a transition to
-        // Connecting, which the state machine only permits from Disconnected/
-        // Reconnecting/Failed -- entering it straight from Authenticated (or
-        // Streaming/NegotiatingCrypto/Authenticating) throws. So tear any existing
-        // session down to a clean Disconnected baseline first; from there the
-        // Connecting transition is always legal.
+        // Connecting, which the state machine only permits from Disconnected/Failed
+        // -- entering it straight from Authenticated (or Streaming/NegotiatingCrypto/
+        // Authenticating) throws. So tear any existing session down to a clean
+        // Disconnected baseline first; from there the Connecting transition is legal.
         disconnect()
-        reconnectAttempt = 0
-        connectJob = scope.launch { attemptConnect(credentials, isManual = true) }
+        connectJob = scope.launch { attemptConnect(credentials) }
     }
 
     fun disconnect() {
@@ -106,7 +107,7 @@ class CameraSessionManager(
         }
     }
 
-    private suspend fun attemptConnect(credentials: CameraCredentials, isManual: Boolean) {
+    private suspend fun attemptConnect(credentials: CameraCredentials) {
         transition(ConnectionState.Connecting)
         if (!loginRateLimiter.tryAcquire()) {
             transition(
@@ -145,7 +146,6 @@ class CameraSessionManager(
             transition(ConnectionState.Authenticating)
             val session = loginNegotiator.negotiate(t, credentials)
             transition(ConnectionState.Authenticated(session.sessionId, session.aliveIntervalSeconds))
-            reconnectAttempt = 0
 
             val channel = DvripCommandChannel(t, session.sessionId, session.crypto)
             commandChannel = channel
@@ -153,7 +153,10 @@ class CameraSessionManager(
                 channel = channel,
                 aliveIntervalSeconds = session.aliveIntervalSeconds,
                 sessionIdHex = "0x%08X".format(session.sessionId.toLong()),
-                onFailure = { scheduleReconnect(credentials, reason = "keepalive failed: ${it.message}") },
+                // A dropped keepalive means the link is gone. Do NOT relogin -- tear
+                // down and report it, and let the user reconnect on purpose. See the
+                // class doc on why auto-reconnect was removed.
+                onFailure = { onConnectionLost("keepalive failed: ${it.message}") },
             ).also { it.start(scope) }
         } catch (e: Exception) {
             t.close()
@@ -166,20 +169,24 @@ class CameraSessionManager(
                     "connect failed: ${e.message}",
                 ),
             )
-            // A credential rejection will never succeed by retrying, and hammering
-            // the camera with repeated rejected logins is exactly what trips its
-            // account lockout (Ret:205). So an auth rejection goes straight to
-            // Failed with a clear message and does NOT feed the auto-reconnect
-            // loop, even on a non-manual (keepalive-triggered) attempt. Only
-            // transient transport errors are worth reconnecting on.
             val authRejection = e as? LoginNegotiationBlockedException
             if (authRejection?.isAuthRejection == true) {
                 transition(ConnectionState.Failed(authFailureReason(authRejection)))
-            } else if (isManual) {
-                transition(ConnectionState.Failed(e.message ?: e.toString()))
             } else {
-                scheduleReconnect(credentials, reason = e.message ?: e.toString())
+                transition(ConnectionState.Failed(e.message ?: e.toString()))
             }
+        }
+    }
+
+    /** A live session's link dropped. Tear it down and surface it; never auto-relogin. */
+    private fun onConnectionLost(reason: String) {
+        keepalive?.stop()
+        transport?.close()
+        transport = null
+        commandChannel = null
+        val failed = ConnectionState.Failed("Connection to the camera was lost ($reason). Tap Reconnect.")
+        if (ConnectionStateMachine.canTransition(_state.value, failed)) {
+            _state.value = failed
         }
     }
 
@@ -191,24 +198,6 @@ class CameraSessionManager(
         } else {
             "Login rejected by the camera (Ret:${e.ret}). Check the username and password."
         }
-
-    private fun scheduleReconnect(credentials: CameraCredentials, reason: String) {
-        keepalive?.stop()
-        transport?.close()
-        transport = null
-        commandChannel = null
-        reconnectAttempt++
-        if (reconnectAttempt > maxAutoReconnectAttempts) {
-            transition(ConnectionState.Failed("gave up after $maxAutoReconnectAttempts reconnect attempts: $reason"))
-            return
-        }
-        val delayMillis = reconnectBackoff.delayForAttempt(reconnectAttempt)
-        transition(ConnectionState.Reconnecting(reconnectAttempt, System.currentTimeMillis() + delayMillis, reason))
-        connectJob = scope.launch {
-            delay(delayMillis)
-            attemptConnect(credentials, isManual = false)
-        }
-    }
 
     /** Releases everything; this manager instance must not be reused after calling shutdown(). */
     fun shutdown() {

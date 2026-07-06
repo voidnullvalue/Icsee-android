@@ -73,7 +73,6 @@ fun DiagnosticsScreen(
                 "Last error",
                 when (state) {
                     is ConnectionState.Failed -> (state as ConnectionState.Failed).reason
-                    is ConnectionState.Reconnecting -> (state as ConnectionState.Reconnecting).reason
                     else -> "-"
                 },
             )
