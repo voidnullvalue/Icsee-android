@@ -24,7 +24,7 @@ and verified against a real camera; every protocol decision is backed by capture
 or live-probed bytes documented in [`PROTOCOL_NOTES.md`](PROTOCOL_NOTES.md).
 
 
-Soecial Thanks goes to my wife foe hitting the reset button on the camera lots of times at odd hours.
+Soecial thanks goes to my wife foe hitting the reset button on the camera lots of times at odd hours.
 
 ## Contents
 
