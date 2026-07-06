@@ -13,6 +13,17 @@ class ReconnectBackoffTest {
     }
 
     @Test
+    fun `default reconnects are spaced out to avoid Ret205 login bursts`() {
+        // Each reconnect is a real login and this firmware locks on rapid bursts, so
+        // the very first retry must already be many seconds out (not sub-second).
+        val backoff = ReconnectBackoff()
+        assertTrue(
+            "first reconnect must wait >=15s so a drop can't machine-gun logins",
+            backoff.delayForAttempt(1) >= 15_000,
+        )
+    }
+
+    @Test
     fun `delay grows exponentially and is bounded by the maximum`() {
         val backoff = ReconnectBackoff(baseDelayMillis = 1000, maxDelayMillis = 10_000, factor = 2.0)
         assertEquals(1000, backoff.delayForAttempt(1))

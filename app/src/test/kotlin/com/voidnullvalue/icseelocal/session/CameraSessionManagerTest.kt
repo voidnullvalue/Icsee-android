@@ -47,7 +47,12 @@ class CameraSessionManagerTest {
             client.close()
         }
 
-        val manager = CameraSessionManager("127.0.0.1", server.localPort)
+        val manager = CameraSessionManager(
+            "127.0.0.1", server.localPort,
+            // Permissive limiter: these tests exercise the state machine / sequence
+            // handling with rapid back-to-back logins, not the Ret:205 rate ceiling.
+            loginRateLimiter = LoginRateLimiter(minIntervalMillis = 0, maxAttempts = 100),
+        )
 
         manager.connect(CameraCredentials("testuser", "hunter2"))
 
@@ -97,7 +102,12 @@ class CameraSessionManagerTest {
             }
         }
 
-        val manager = CameraSessionManager("127.0.0.1", server.localPort)
+        val manager = CameraSessionManager(
+            "127.0.0.1", server.localPort,
+            // Permissive limiter: these tests exercise the state machine / sequence
+            // handling with rapid back-to-back logins, not the Ret:205 rate ceiling.
+            loginRateLimiter = LoginRateLimiter(minIntervalMillis = 0, maxAttempts = 100),
+        )
         manager.connect(CameraCredentials("testuser", "hunter2"))
         withTimeout(5000) {
             while (manager.state.value !is ConnectionState.Authenticated) delay(20)
@@ -154,7 +164,12 @@ class CameraSessionManagerTest {
             }
         }
 
-        val manager = CameraSessionManager("127.0.0.1", server.localPort)
+        val manager = CameraSessionManager(
+            "127.0.0.1", server.localPort,
+            // Permissive limiter: these tests exercise the state machine / sequence
+            // handling with rapid back-to-back logins, not the Ret:205 rate ceiling.
+            loginRateLimiter = LoginRateLimiter(minIntervalMillis = 0, maxAttempts = 100),
+        )
 
         manager.connect(CameraCredentials("testuser", "hunter2"))
         withTimeout(5000) {

@@ -31,7 +31,10 @@ class CameraSessionManager(
     private val port: Int,
     private val loginNegotiator: LoginNegotiator = DvripLoginNegotiator(),
     private val reconnectBackoff: ReconnectBackoff = ReconnectBackoff(),
-    private val maxAutoReconnectAttempts: Int = 5,
+    // Deliberately few: with the slow backoff above, 3 attempts already span several
+    // minutes. Each is a real login, so we bound how many a single drop can spend
+    // before giving up and waiting for the user (rather than machine-gunning Ret:205).
+    private val maxAutoReconnectAttempts: Int = 3,
     // Shared, per-camera login budget. Defaults to a private one for standalone use
     // (tests, a manager built directly), but CameraSessionRegistry injects a single
     // instance shared across every manager it builds for the same camera so the
@@ -108,10 +111,9 @@ class CameraSessionManager(
         if (!loginRateLimiter.tryAcquire()) {
             transition(
                 ConnectionState.Failed(
-                    "Stopped automatically: ${loginRateLimiter.maxAttempts} login attempts in the last " +
-                        "${loginRateLimiter.windowMillis / 60_000} minutes (usually a flaky connection to the " +
-                        "camera). Repeated logins can trip the camera's own Ret:205 lockout, so this app " +
-                        "stops rather than keep hammering it -- wait a few minutes, then tap Reconnect.",
+                    "Paused to protect the camera: too many or too-frequent logins (usually a flaky " +
+                        "connection). Rapid repeated logins trip this camera's own Ret:205 lockout, so the " +
+                        "app backs off rather than keep hammering it -- wait a minute, then tap Reconnect.",
                 ),
             )
             return
