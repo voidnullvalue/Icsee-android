@@ -23,6 +23,9 @@ camera on your LAN over its native DVRIP protocol (TCP 34567) and RTSP — with
 and verified against a real camera; every protocol decision is backed by captured
 or live-probed bytes documented in [`PROTOCOL_NOTES.md`](PROTOCOL_NOTES.md).
 
+
+Special thanks goes to my wife foe hitting the reset button on the camera lots of times at odd hours.
+
 ## Contents
 
 - [Download](#download)
