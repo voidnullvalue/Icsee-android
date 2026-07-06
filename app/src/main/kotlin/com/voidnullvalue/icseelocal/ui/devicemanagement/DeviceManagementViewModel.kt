@@ -2,6 +2,9 @@ package com.voidnullvalue.icseelocal.ui.devicemanagement
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.voidnullvalue.icseelocal.config.ConfigResult
 import com.voidnullvalue.icseelocal.config.DvripConfigChannel
@@ -19,6 +22,7 @@ import com.voidnullvalue.icseelocal.session.DvripLoginNegotiator
 import com.voidnullvalue.icseelocal.storage.CameraStore
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -72,15 +76,38 @@ data class DeviceManagementUiState(
     val recordingsQuerying: Boolean = false,
 )
 
-class DeviceManagementViewModel(application: Application) : AndroidViewModel(application) {
+class DeviceManagementViewModel(application: Application) : AndroidViewModel(application), DefaultLifecycleObserver {
     private val store = CameraStore(application)
     private var sessionManager: CameraSessionManager? = null
     private var camera: CameraDescriptor? = null
     private var credentials: CameraCredentials? = null
     private var configChannel: DvripConfigChannel? = null
 
+    // The coroutine collecting the current manager's state. Held so a reload can
+    // cancel it -- otherwise each load() leaked a collector bound to a manager we
+    // were about to replace.
+    private var stateJob: Job? = null
+
+    // Set in onStop() when we tear the session down for backgrounding, so onStart()
+    // knows whether to bring it back. See the onStop/onStart rationale below.
+    private var resumeSessionOnForeground = false
+
     private val _state = MutableStateFlow(DeviceManagementUiState())
     val state: StateFlow<DeviceManagementUiState> = _state.asStateFlow()
+
+    init {
+        // This ViewModel is Activity-scoped (see MainActivity: default viewModel()
+        // scoping, shared across the whole device-management screen family), so it --
+        // and its DVRIP control session, keepalive, and auto-reconnect loop -- outlive
+        // the visible screen and keep running in the background indefinitely. Left
+        // unmanaged, a session opened once (right after associating a camera, to
+        // configure it) would keep silently re-logging-in on every socket hiccup for
+        // hours or days, which the camera's firmware counts toward its Ret:205 rate
+        // lockout -- an automatic auth "spam" independent of any flaky link or button.
+        // LiveControlViewModel already guards against this; observe the process
+        // lifecycle here too so the session is torn down while backgrounded.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(this)
+    }
 
     fun load(cameraId: String) {
         viewModelScope.launch {
@@ -89,9 +116,17 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
             val creds = store.credentialsFor(cameraId) ?: CameraCredentials("", "")
             credentials = creds
 
+            // Tear down any session/collector from a previous load() before starting a
+            // new one. Without this, re-opening device management stacked another
+            // immortal CameraSessionManager (each with its own keepalive + reconnect
+            // loop and its own fresh rate limiter) on top of the old one, multiplying
+            // the background login rate every time the screen was reopened.
+            stateJob?.cancel()
+            sessionManager?.shutdown()
+
             val manager = CameraSessionManager(found.host, found.dvripPort)
             sessionManager = manager
-            viewModelScope.launch {
+            stateJob = viewModelScope.launch {
                 manager.state.collect { connState ->
                     _state.value = _state.value.copy(connectionState = connState)
                     if (connState is ConnectionState.Authenticated) {
@@ -102,6 +137,28 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
             }
             manager.connect(creds)
         }
+    }
+
+    override fun onStop(owner: LifecycleOwner) {
+        // App backgrounded: there is nothing to show and no reason to keep a control
+        // session (and its keepalive/auto-reconnect) alive, so drop it. Remember
+        // whether it was actually live so onStart can bring it back -- but never
+        // resume a session that was already Failed (e.g. a real credential rejection),
+        // which would just re-spam a login the camera already refused.
+        val state = sessionManager?.state?.value
+        resumeSessionOnForeground = state is ConnectionState.Authenticated ||
+            state is ConnectionState.Reconnecting ||
+            state is ConnectionState.Connecting ||
+            state is ConnectionState.NegotiatingCrypto ||
+            state is ConnectionState.Authenticating
+        sessionManager?.disconnect()
+    }
+
+    override fun onStart(owner: LifecycleOwner) {
+        if (!resumeSessionOnForeground) return
+        resumeSessionOnForeground = false
+        val creds = credentials ?: return
+        sessionManager?.connect(creds)
     }
 
     private fun withChannel(action: suspend (DvripConfigChannel) -> Unit) {
@@ -500,6 +557,8 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
     suspend fun getConfigMetadata(configName: String) = configChannel?.getCachedMetadata(configName)
 
     override fun onCleared() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(this)
+        stateJob?.cancel()
         sessionManager?.shutdown()
     }
 }
