@@ -68,6 +68,7 @@ class DvripLoginNegotiator(
                     aliveIntervalSeconds = login.aliveIntervalSeconds,
                     transport = transport,
                     crypto = NullSessionCrypto,
+                    adminToken = login.adminToken,
                 )
             }
         }

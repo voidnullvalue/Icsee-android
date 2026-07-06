@@ -58,6 +58,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -78,6 +79,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -101,7 +105,12 @@ fun LiveControlScreen(
     onBack: () -> Unit,
     viewModel: LiveControlViewModel = viewModel(),
 ) {
-    LaunchedEffect(cameraId) { viewModel.load(cameraId) }
+    // Connecting/disconnecting is driven centrally by MainActivity (see
+    // enterFocus/leaveFocus on the ViewModel) based on which Live-family screen
+    // (this one or Diagnostics) is actually on screen -- not from here, since this
+    // composable also unmounts when navigating to Diagnostics (same family, same
+    // session must keep running) and there's no local way to tell that apart from
+    // navigating away entirely.
     val camera by viewModel.camera.collectAsState()
     val state by viewModel.connectionState.collectAsState()
     val speed by viewModel.speedStep.collectAsState()
@@ -440,14 +449,39 @@ private fun SpeedControl(speed: Int, onChange: (Int) -> Unit) {
 @UnstableApi
 @Composable
 private fun VideoSurface(viewModel: LiveControlViewModel, rtspState: RtspPlayerState, modifier: Modifier) {
+    // PlayerView's underlying SurfaceView often comes back from a backgrounded app
+    // with a blank/stale surface -- ExoPlayer itself keeps playing (rtspState never
+    // leaves Playing, so nothing here recomposes on resume), it just isn't being
+    // drawn to this particular View anymore. Reassigning the *same* player instance
+    // is a no-op in PlayerView.setPlayer, which is why simple recomposition doesn't
+    // fix it -- only a genuinely new PlayerView (e.g. the one Fullscreen creates)
+    // gets a fresh bind. So force that same detach/reattach explicitly whenever the
+    // surrounding Activity restarts (covers both real app-switch resume and the
+    // window-surface churn Android does around backgrounding).
+    val exoPlayer = viewModel.rtspPlayer.exoPlayer
+    var playerView by remember { mutableStateOf<PlayerView?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                playerView?.let {
+                    it.player = null
+                    it.player = exoPlayer
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     Box(modifier, contentAlignment = Alignment.Center) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 PlayerView(ctx).apply {
-                    player = viewModel.rtspPlayer.exoPlayer
+                    player = exoPlayer
                     useController = false
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    playerView = this
                 }
             },
         )

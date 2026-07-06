@@ -18,7 +18,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,7 +42,11 @@ fun DeviceManagementScreen(
     onBack: () -> Unit,
     viewModel: DeviceManagementViewModel = viewModel(),
 ) {
-    LaunchedEffect(cameraId) { viewModel.load(cameraId) }
+    // Connecting/disconnecting is driven centrally by MainActivity (see
+    // enterFocus/leaveFocus on the ViewModel) based on which device-management-
+    // family screen is actually on screen -- not from here, since this composable
+    // also unmounts when navigating to ConfigEditor/ImageSettings/PlaybackBrowser
+    // (same family, same session must keep running).
     val state by viewModel.state.collectAsState()
     var showPasswordDialog by remember { mutableStateOf(false) }
     var showUsernameDialog by remember { mutableStateOf(false) }

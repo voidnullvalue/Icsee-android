@@ -6,6 +6,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
+import com.voidnullvalue.icseelocal.app.IcseeApplication
 import com.voidnullvalue.icseelocal.config.ConfigResult
 import com.voidnullvalue.icseelocal.config.DvripConfigChannel
 import com.voidnullvalue.icseelocal.config.SystemInfo
@@ -18,10 +19,8 @@ import com.voidnullvalue.icseelocal.model.ConnectionState
 import com.voidnullvalue.icseelocal.session.CameraCredentials
 import com.voidnullvalue.icseelocal.session.CameraSessionManager
 import com.voidnullvalue.icseelocal.session.DvripCommandChannel
-import com.voidnullvalue.icseelocal.session.DvripLoginNegotiator
 import com.voidnullvalue.icseelocal.storage.CameraStore
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -31,7 +30,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -78,87 +76,114 @@ data class DeviceManagementUiState(
 
 class DeviceManagementViewModel(application: Application) : AndroidViewModel(application), DefaultLifecycleObserver {
     private val store = CameraStore(application)
+    // Shared session owner -- this ViewModel no longer builds or shuts down managers;
+    // it acquires the registry's single session for the camera (shared with live
+    // view, for zero extra logins when both are used) and releases it. See
+    // [CameraSessionRegistry].
+    private val registry = (application as IcseeApplication).sessionRegistry
     private var sessionManager: CameraSessionManager? = null
     private var camera: CameraDescriptor? = null
     private var credentials: CameraCredentials? = null
     private var configChannel: DvripConfigChannel? = null
 
-    // The coroutine collecting the current manager's state. Held so a reload can
-    // cancel it -- otherwise each load() leaked a collector bound to a manager we
-    // were about to replace.
+    // The coroutine observing the shared manager's state. Held so it can be cancelled
+    // when we release the session (on re-load or navigation away).
     private var stateJob: Job? = null
 
-    // Set in onStop() when we tear the session down for backgrounding, so onStart()
-    // knows whether to bring it back. See the onStop/onStart rationale below.
-    private var resumeSessionOnForeground = false
+    // The camera we currently hold a registry acquire for (null = not holding).
+    // Makes releaseSession idempotent so leaveFocus and onStop can't double-release.
+    private var held: CameraDescriptor? = null
 
     private val _state = MutableStateFlow(DeviceManagementUiState())
     val state: StateFlow<DeviceManagementUiState> = _state.asStateFlow()
 
+    // This ViewModel is Activity-scoped and outlives any individual screen --
+    // navigating back to Live Control does NOT clear it. A camera's firmware in
+    // this class (Xiongmai/XM-derived DVRIP) is known to be touchy about login
+    // *rate*, not just failed passwords, so this app only ever logs in while a
+    // screen that needs the session is actually the one in view (enterFocus/
+    // leaveFocus below, driven by MainActivity) -- never as a standing background
+    // service that reconnects on its own schedule.
+
     init {
-        // This ViewModel is Activity-scoped (see MainActivity: default viewModel()
-        // scoping, shared across the whole device-management screen family), so it --
-        // and its DVRIP control session, keepalive, and auto-reconnect loop -- outlive
-        // the visible screen and keep running in the background indefinitely. Left
-        // unmanaged, a session opened once (right after associating a camera, to
-        // configure it) would keep silently re-logging-in on every socket hiccup for
-        // hours or days, which the camera's firmware counts toward its Ret:205 rate
-        // lockout -- an automatic auth "spam" independent of any flaky link or button.
-        // LiveControlViewModel already guards against this; observe the process
-        // lifecycle here too so the session is torn down while backgrounded.
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
+    }
+
+    /**
+     * Called by MainActivity exactly when a device-management-family screen becomes
+     * the one on screen. Fires only on a real transition into the family (see
+     * MainActivity's `LaunchedEffect` keyed on the family's camera id), not on every
+     * recomposition, so bouncing between DeviceManagement and its sub-screens
+     * (ConfigEditor, ImageSettings, PlaybackBrowser) for the same camera does not
+     * re-acquire.
+     */
+    fun enterFocus(cameraId: String) {
+        load(cameraId)
+    }
+
+    /**
+     * Called by MainActivity exactly when navigation leaves the device-management
+     * family (anywhere else, including back to Live Control). Releases the shared
+     * session back to the registry (which lingers briefly then tears it down);
+     * nothing keeps reconnecting for a screen nobody is looking at.
+     */
+    fun leaveFocus() {
+        releaseSession()
     }
 
     fun load(cameraId: String) {
         viewModelScope.launch {
             val found = store.cameras.first().firstOrNull { it.id == cameraId } ?: return@launch
+
+            // Release any previously-held camera before acquiring the new one.
+            releaseSession()
+
             camera = found
             val creds = store.credentialsFor(cameraId) ?: CameraCredentials("", "")
             credentials = creds
-
-            // Tear down any session/collector from a previous load() before starting a
-            // new one. Without this, re-opening device management stacked another
-            // immortal CameraSessionManager (each with its own keepalive + reconnect
-            // loop and its own fresh rate limiter) on top of the old one, multiplying
-            // the background login rate every time the screen was reopened.
-            stateJob?.cancel()
-            sessionManager?.shutdown()
-
-            val manager = CameraSessionManager(found.host, found.dvripPort)
-            sessionManager = manager
-            stateJob = viewModelScope.launch {
-                manager.state.collect { connState ->
-                    _state.value = _state.value.copy(connectionState = connState)
-                    if (connState is ConnectionState.Authenticated) {
-                        configChannel = DvripConfigChannel(manager.controlTransport!!, manager.commandChannel!!, connState.sessionId, getApplication())
-                        refreshAll()
-                    }
-                }
-            }
-            manager.connect(creds)
+            acquireSession(found, creds)
         }
     }
 
-    override fun onStop(owner: LifecycleOwner) {
-        // App backgrounded: there is nothing to show and no reason to keep a control
-        // session (and its keepalive/auto-reconnect) alive, so drop it. Remember
-        // whether it was actually live so onStart can bring it back -- but never
-        // resume a session that was already Failed (e.g. a real credential rejection),
-        // which would just re-spam a login the camera already refused.
-        val state = sessionManager?.state?.value
-        resumeSessionOnForeground = state is ConnectionState.Authenticated ||
-            state is ConnectionState.Reconnecting ||
-            state is ConnectionState.Connecting ||
-            state is ConnectionState.NegotiatingCrypto ||
-            state is ConnectionState.Authenticating
-        sessionManager?.disconnect()
+    /**
+     * Acquires the shared session for [found] from the registry (connecting it if
+     * it isn't already up -- possibly reusing one live view is holding, for zero
+     * extra logins) and observes its state to build the config channel.
+     */
+    private fun acquireSession(found: CameraDescriptor, creds: CameraCredentials) {
+        val manager = registry.acquire(found.host, found.dvripPort, creds)
+        sessionManager = manager
+        held = found
+        stateJob?.cancel()
+        stateJob = viewModelScope.launch {
+            manager.state.collect { connState ->
+                _state.value = _state.value.copy(connectionState = connState)
+                if (connState is ConnectionState.Authenticated) {
+                    configChannel = DvripConfigChannel(manager.controlTransport!!, manager.commandChannel!!, connState.sessionId, getApplication())
+                    refreshAll()
+                }
+            }
+        }
     }
 
-    override fun onStart(owner: LifecycleOwner) {
-        if (!resumeSessionOnForeground) return
-        resumeSessionOnForeground = false
-        val creds = credentials ?: return
-        sessionManager?.connect(creds)
+    /** Releases the shared session back to the registry. Idempotent. */
+    private fun releaseSession() {
+        val h = held ?: return
+        held = null
+        stateJob?.cancel()
+        stateJob = null
+        configChannel = null
+        sessionManager = null
+        registry.release(h.host, h.dvripPort)
+    }
+
+    override fun onStop(owner: LifecycleOwner) {
+        // App backgrounded: release the shared session. Deliberately NOT re-acquired
+        // on onStart, unlike the Live-family session -- device management is an
+        // occasional, deliberate task, not something meant to sit connected in the
+        // background. Re-entering the screen reconnects via enterFocus -> load(), so
+        // nothing is lost by staying released until the user actually comes back.
+        releaseSession()
     }
 
     private fun withChannel(action: suspend (DvripConfigChannel) -> Unit) {
@@ -347,17 +372,20 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                 // Ret:100 alone is NOT proof the change applied. Some firmware
                 // (this test camera included) ACKs the legacy MD5 ModifyPassword
                 // with Ret:100 but validates login against a separate PasswordV2
-                // blob, so the password never actually changes. Verify by opening
-                // a fresh login with the new password before claiming success --
-                // never trust the ACK. See PROTOCOL_NOTES.md "Account management".
-                val applied = verifyLogin(cam.host, cam.dvripPort, creds.username, newPassword)
-                if (applied) {
-                    val newCreds = CameraCredentials(creds.username, newPassword)
+                // blob, so the password never actually changes. Verify by actually
+                // re-authenticating with the new password -- never trust the ACK.
+                // The credential change invalidates the current session anyway, so
+                // reconnecting is required regardless; doing it *as* the verification
+                // (instead of a separate throwaway login) is one login, not two.
+                val newCreds = CameraCredentials(creds.username, newPassword)
+                if (reconnectAndAwait(cam, newCreds)) {
                     store.save(cam, newCreds)
                     credentials = newCreds
-                    sessionManager?.connect(newCreds)
                     _state.value = _state.value.copy(statusMessage = "Password changed")
                 } else {
+                    // New password doesn't actually authenticate -- restore the live
+                    // session under the still-working old credentials.
+                    reconnectAndAwait(cam, creds)
                     _state.value = _state.value.copy(
                         errorMessage = "The camera accepted the request but the new password does not " +
                             "work -- this firmware likely requires an encrypted password scheme this app " +
@@ -421,14 +449,14 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                     _state.value = _state.value.copy(errorMessage = "Username change rejected by the camera (Ret=$ret)")
                     return@runCatching
                 }
-                val applied = verifyLogin(cam.host, cam.dvripPort, newUsername, creds.password)
-                if (applied) {
-                    val newCreds = CameraCredentials(newUsername, creds.password)
+                val newCreds = CameraCredentials(newUsername, creds.password)
+                if (reconnectAndAwait(cam, newCreds)) {
                     store.save(cam, newCreds)
                     credentials = newCreds
-                    sessionManager?.connect(newCreds)
                     _state.value = _state.value.copy(statusMessage = "Username changed to '$newUsername'")
                 } else {
+                    // Restore the live session under the old identity.
+                    reconnectAndAwait(cam, creds)
                     _state.value = _state.value.copy(
                         errorMessage = "The camera accepted the request but login under '$newUsername' failed. " +
                             "Username may be unchanged.",
@@ -440,24 +468,27 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
     }
 
     /**
-     * Opens a throwaway DVRIP login with the given credentials purely to check
-     * whether they authenticate, then closes it. Used to verify a
-     * password/username change actually took effect rather than trusting the
-     * command's Ret:100 ACK. Returns false on any connection/auth failure.
+     * Reconnects the shared session under [creds] and waits for it to settle,
+     * returning true iff it authenticated. This both re-establishes the live session
+     * (mandatory after a credential change, which invalidates the old one) and serves
+     * as the honest verification that the new credentials actually work -- one login
+     * instead of the old throwaway-verify-then-reconnect pair. Routed through the
+     * registry so the shared session and its stored credentials update for every
+     * consumer, and so it stays under the per-camera login-rate ceiling.
+     *
+     * connect() tears the old session down synchronously before launching the new
+     * attempt, so by the time this awaits, state has already left Authenticated --
+     * no risk of reading the pre-reconnect success as if it were the new one.
      */
-    private suspend fun verifyLogin(host: String, port: Int, username: String, password: String): Boolean =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val probe = DvripTransport(host, port)
-                try {
-                    probe.connect()
-                    DvripLoginNegotiator().negotiate(probe, CameraCredentials(username, password))
-                    true
-                } finally {
-                    probe.close()
-                }
-            }.getOrDefault(false)
-        }
+    private suspend fun reconnectAndAwait(cam: CameraDescriptor, creds: CameraCredentials): Boolean {
+        registry.reconnect(cam.host, cam.dvripPort, creds)
+        val manager = sessionManager ?: return false
+        return withTimeoutOrNull(12_000) {
+            manager.state.first {
+                it is ConnectionState.Authenticated || it is ConnectionState.Failed
+            } is ConnectionState.Authenticated
+        } ?: false
+    }
 
     fun clearStatus() {
         _state.value = _state.value.copy(statusMessage = null, errorMessage = null)
@@ -558,7 +589,6 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
 
     override fun onCleared() {
         ProcessLifecycleOwner.get().lifecycle.removeObserver(this)
-        stateJob?.cancel()
-        sessionManager?.shutdown()
+        releaseSession()
     }
 }

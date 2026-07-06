@@ -58,10 +58,15 @@ class CameraListViewModel(application: Application) : AndroidViewModel(applicati
         if (_discovering.value) return
         val clean = prefix.trim().removeSuffix(".")
         if (!clean.matches(Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}"""))) return
+        // Don't probe cameras we already have saved -- they're filtered out of the
+        // discovered list anyway, so a probe to them is wasted network to a device we
+        // already know about. (The probe itself no longer authenticates, but skipping
+        // is still the right call.)
+        val savedIps = savedCameras.value.map { it.host }.toSet()
         viewModelScope.launch {
             _discovering.value = true
             try {
-                _discovered.value = discoveryClient.discoverSweep(clean)
+                _discovered.value = discoveryClient.discoverSweep(clean, skipHosts = savedIps)
             } finally {
                 _discovering.value = false
             }

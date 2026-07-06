@@ -53,3 +53,22 @@ This document tracks which protocol features have been live-confirmed against a 
 - **Race-safe request/response**: Subscribe to DvripTransport.incomingFrames BEFORE sending (matches DvripLoginNegotiator)
 - **Generic JSON editing**: EditableJson tree model covers all named configs without per-config UI
 - **Post-BLE-provision credential setting**: ChangeRandomUserClient standalone, no prior session needed
+- **Single shared, rate-limited session per camera**: `CameraSessionRegistry`
+  (app-scoped) owns one `CameraSessionManager` per `host:port`, reference-counted
+  across the live-view and device-management screen families with a short linger
+  before teardown, and a per-camera `LoginRateLimiter` that survives manager
+  rebuilds. This firmware counts login *rate* toward its Ret:205 lockout, so the
+  whole app authenticates as rarely as possible and never in the background.
+
+## Auth-rate reduction — open investigation
+- **`AdminToken` (login response, msg 1001)**: captured onto `AuthenticatedSession`
+  (`adminToken`) but not yet used. **Open question:** does presenting it permit
+  token-based *session resumption* on a fresh TCP connection instead of a full
+  password login? If so, the unavoidable socket-death reconnects could stop
+  counting against the Ret:205 login-rate budget — the single biggest remaining
+  lever. Needs a live camera to probe (send a resumed-session frame carrying the
+  token on a new socket and see whether commands are accepted without a msg-1000
+  login). Not evidenced yet either way.
+- **Discovery no longer authenticates**: the subnet sweep discriminator is now a
+  msg-1010 pre-login negotiate (answered by msg 1011 with no login), not a msg-1000
+  login, and already-saved camera IPs are skipped entirely.

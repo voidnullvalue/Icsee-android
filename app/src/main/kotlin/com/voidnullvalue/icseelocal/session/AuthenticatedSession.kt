@@ -8,6 +8,17 @@ data class AuthenticatedSession(
     val aliveIntervalSeconds: Int,
     val transport: DvripTransport,
     val crypto: SessionCrypto,
+    /**
+     * The `AdminToken` the camera returns in the login response (msg 1001). Its
+     * purpose is not yet confirmed (see PROTOCOL_NOTES.md / PROTOCOL_STATUS.md
+     * "AdminToken"); it is captured here rather than discarded because if it turns
+     * out to permit token-based *session resumption* on a fresh TCP connection, the
+     * unavoidable socket-death reconnects could stop being full password logins --
+     * the single biggest remaining lever on this camera's login-rate budget. Not
+     * used for anything yet; wiring it through is deliberate groundwork, and
+     * confirming resumption needs a live camera.
+     */
+    val adminToken: String? = null,
 )
 
 /**

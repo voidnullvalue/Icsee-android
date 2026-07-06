@@ -78,6 +78,19 @@ class RtspVideoPlayer(context: Context) {
         exoPlayer.playWhenReady = true
     }
 
+    /**
+     * Stops playback and clears the current stream without releasing the underlying
+     * [ExoPlayer], so the same instance can be [start]ed again (e.g. when the live
+     * screen is re-entered or the app returns to the foreground). Use [release] only
+     * when the player is being thrown away for good.
+     */
+    fun stop() {
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+        usedFallback = false
+        _state.value = RtspPlayerState.Idle
+    }
+
     fun release() {
         exoPlayer.release()
     }
