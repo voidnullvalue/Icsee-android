@@ -1,5 +1,6 @@
 package com.voidnullvalue.icseelocal.discovery
 
+import com.voidnullvalue.icseelocal.crypto.SofiaHash
 import com.voidnullvalue.icseelocal.dvrip.DvripFrame
 import com.voidnullvalue.icseelocal.dvrip.DvripHeader
 import com.voidnullvalue.icseelocal.dvrip.DvripMessageIds
@@ -98,12 +99,23 @@ class CameraDiscoveryClient(
         seen.values.toList()
     }
 
-    // A minimal DVRIP login request (msg 1000). Sent purely to elicit the
-    // camera's login *response* (msg 1001); the credentials are irrelevant --
-    // the camera answers 1001 regardless of whether they're valid, and even
-    // while account-locked (Ret:205), which still counts as "a camera is here".
+    // A minimal DVRIP login request (msg 1000). Sent purely to elicit the camera's
+    // login *response* (msg 1001) as a "something DVRIP is here" discriminator --
+    // any valid reply counts, the Ret code doesn't matter for detection. BUT the
+    // password here is NOT a throwaway value: a literal empty string for `admin`
+    // is a REJECTED login (Ret:203, confirmed live -- see PROTOCOL_NOTES.md
+    // "Login -- LIVE AUTHENTICATION CONFIRMED"), so this used to send one
+    // guaranteed wrong-password attempt against the real camera's real `admin`
+    // account on every sweep run -- repeated sweeps (e.g. re-scanning while
+    // troubleshooting a WireGuard route) could accumulate enough rejected logins
+    // to trip the camera's own Ret:205 temporary lockout, with nothing flaky
+    // about the network at all. `admin` with its password run through
+    // SofiaHash -- including the blank password -- authenticates successfully
+    // (Ret:100) on this camera family's unremovable backdoor account (see
+    // SECURITY.md), so hashing it here makes the probe a real *successful*
+    // login instead of a guaranteed rejection, with no loss of detection power.
     private val loginProbeBytes: ByteArray by lazy {
-        val json = """{"EncryptType":"MD5","LoginType":"DVRIP-Web","PassWord":"","UserName":"admin"}"""
+        val json = """{"EncryptType":"MD5","LoginType":"DVRIP-Web","PassWord":"${SofiaHash.hash("")}","UserName":"admin"}"""
         DvripFrame.of(0u, 0u, DvripMessageIds.LOGIN_REQUEST, DvripPayloads.encodeJson(json), type = 1).encode()
     }
 
