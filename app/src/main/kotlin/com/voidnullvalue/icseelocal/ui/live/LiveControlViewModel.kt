@@ -124,6 +124,7 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
      * keeps it alive for a short grace window in case we come right back, then tears
      * it down. Nothing is left running unattended.
      */
+    @UnstableApi
     fun leaveFocus() {
         inFocus = false
         releaseSession()
