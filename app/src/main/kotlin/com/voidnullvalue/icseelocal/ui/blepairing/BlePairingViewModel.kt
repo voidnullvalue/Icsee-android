@@ -8,6 +8,7 @@ import com.voidnullvalue.icseelocal.ble.BlePairedCamera
 import com.voidnullvalue.icseelocal.ble.BleWifiProvisionCodec
 import com.voidnullvalue.icseelocal.ble.CameraBlePairingClient
 import com.voidnullvalue.icseelocal.ble.CameraBleScanner
+import android.util.Log
 import com.voidnullvalue.icseelocal.config.ChangeRandomUserClient
 import com.voidnullvalue.icseelocal.config.DvrIpClient
 import com.voidnullvalue.icseelocal.config.XiongmaiCrypto
@@ -120,9 +121,11 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private suspend fun tryQueryXkfuCredentials(host: String, adminUsername: String, adminPassword: String): Pair<String, String>? {
+        Log.d("BlePairingViewModel", "Starting xkfu credential query for $host")
         // Retry a few times: camera needs time to join WiFi and boot
         repeat(3) { attempt ->
             try {
+                Log.d("BlePairingViewModel", "Query attempt ${attempt + 1}/3")
                 val client = DvrIpClient(host, 34567)
                 val userMap = client.queryUserMap(adminUsername, adminPassword)
 
@@ -132,17 +135,25 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
                 }
 
                 if (realAccount != null) {
+                    Log.d("BlePairingViewModel", "Found real account: ${realAccount.name}")
                     val decryptedPassword = realAccount.passwordV2?.let { XiongmaiCrypto.decryptPasswordV2(it) }
                     if (decryptedPassword != null) {
+                        Log.d("BlePairingViewModel", "Successfully decrypted password for ${realAccount.name}")
                         return Pair(realAccount.name, decryptedPassword)
+                    } else {
+                        Log.e("BlePairingViewModel", "Failed to decrypt password")
                     }
+                } else {
+                    Log.w("BlePairingViewModel", "No non-admin account found")
                 }
             } catch (e: Exception) {
+                Log.e("BlePairingViewModel", "Exception on attempt ${attempt + 1}: ${e.message}", e)
                 if (attempt < 2) {
                     kotlinx.coroutines.delay(1000) // Wait 1s before retry
                 }
             }
         }
+        Log.w("BlePairingViewModel", "Failed to query xkfu credentials after 3 attempts")
         return null
     }
 

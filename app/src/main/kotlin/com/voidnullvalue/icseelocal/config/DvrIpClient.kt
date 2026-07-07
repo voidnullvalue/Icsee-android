@@ -1,6 +1,7 @@
 package com.voidnullvalue.icseelocal.config
 
 import android.util.Base64
+import android.util.Log
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -22,6 +23,7 @@ class DvrIpClient(private val host: String, private val port: Int = 34567) {
 
     suspend fun queryUserMap(username: String, password: String): List<UserAccount>? = withContext(Dispatchers.IO) {
         try {
+            Log.d("DvrIpClient", "Querying user map from $host:$port as $username")
             val socket = Socket(host, port)
             socket.soTimeout = 8000
 
@@ -40,15 +42,18 @@ class DvrIpClient(private val host: String, private val port: Int = 34567) {
             // Receive login response
             val loginResp = decodeFrame(socket)
             if (loginResp == null) {
+                Log.e("DvrIpClient", "Failed to receive login response")
                 socket.close()
                 return@withContext null
             }
 
             val loginResponseJson = JSONObject(loginResp.payload)
             if (loginResponseJson.optInt("Ret", -1) != 100) {
+                Log.e("DvrIpClient", "Login failed: ${loginResponseJson.optInt("Ret", -1)}")
                 socket.close()
                 return@withContext null
             }
+            Log.d("DvrIpClient", "Login successful")
 
             val sessionId = loginResponseJson.optString("SessionID", "")
             val sid = sessionId.removePrefix("0x").toLong(16).toInt()
@@ -66,12 +71,16 @@ class DvrIpClient(private val host: String, private val port: Int = 34567) {
             val userMapResp = decodeFrame(socket)
             socket.close()
 
-            if (userMapResp == null) return@withContext null
+            if (userMapResp == null) {
+                Log.e("DvrIpClient", "Failed to receive user map response")
+                return@withContext null
+            }
 
             val userMapJson = JSONObject(userMapResp.payload)
             val users = mutableListOf<UserAccount>()
 
             userMapJson.optJSONObject("System.ExUserMap")?.optJSONArray("User")?.let { arr ->
+                Log.d("DvrIpClient", "Found ${arr.length()} users")
                 for (i in 0 until arr.length()) {
                     val user = arr.getJSONObject(i)
                     users.add(UserAccount(
@@ -81,8 +90,10 @@ class DvrIpClient(private val host: String, private val port: Int = 34567) {
                 }
             }
 
+            Log.d("DvrIpClient", "Returning ${users.size} user accounts")
             users.takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
+            Log.e("DvrIpClient", "Exception querying user map: ${e.message}", e)
             null
         }
     }
