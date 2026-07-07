@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -138,27 +139,31 @@ fun BlePairingScreen(
                             modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                         ) {
-                            Column(Modifier.padding(16.dp)) {
-                                Text("Your login credentials (created during provisioning):", style = MaterialTheme.typography.labelMedium)
-                                Text(
-                                    "Username: ${state.camera.xkfuUsername}",
-                                    modifier = Modifier.padding(top = 12.dp),
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                Text(
-                                    "Password: ${state.camera.xkfuPassword}",
-                                    modifier = Modifier.padding(top = 8.dp),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontFamily = FontFamily.Monospace,
-                                )
-                                Text(
-                                    "⚠ Save these credentials! You'll need them to access the camera.",
-                                    modifier = Modifier.padding(top = 12.dp),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                )
-                                state.camera.mac?.let {
-                                    Text("MAC: $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                            // Selectable so the user can long-press to copy either field --
+                            // there's no clean single "value" to put on a clipboard button here.
+                            SelectionContainer {
+                                Column(Modifier.padding(16.dp)) {
+                                    Text("Your login credentials (created during provisioning):", style = MaterialTheme.typography.labelMedium)
+                                    Text(
+                                        "Username: ${state.camera.xkfuUsername}",
+                                        modifier = Modifier.padding(top = 12.dp),
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                    Text(
+                                        "Password: ${state.camera.xkfuPassword}",
+                                        modifier = Modifier.padding(top = 8.dp),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontFamily = FontFamily.Monospace,
+                                    )
+                                    Text(
+                                        "⚠ Save these credentials! You'll need them to access the camera.",
+                                        modifier = Modifier.padding(top = 12.dp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    )
+                                    state.camera.mac?.let {
+                                        Text("MAC: $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                                    }
                                 }
                             }
                         }
@@ -168,21 +173,23 @@ fun BlePairingScreen(
                             modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         ) {
-                            Column(Modifier.padding(16.dp)) {
-                                Text("Your login credentials (from provisioning ACK):", style = MaterialTheme.typography.labelMedium)
-                                Text(
-                                    "Username: ${state.camera.username}",
-                                    modifier = Modifier.padding(top = 12.dp),
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                Text(
-                                    "Password: ${state.camera.password.ifBlank { "(no password)" }}",
-                                    modifier = Modifier.padding(top = 8.dp),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontFamily = FontFamily.Monospace,
-                                )
-                                state.camera.mac?.let {
-                                    Text("MAC: $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+                            SelectionContainer {
+                                Column(Modifier.padding(16.dp)) {
+                                    Text("Your login credentials (from provisioning ACK):", style = MaterialTheme.typography.labelMedium)
+                                    Text(
+                                        "Username: ${state.camera.username}",
+                                        modifier = Modifier.padding(top = 12.dp),
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                    Text(
+                                        "Password: ${state.camera.password.ifBlank { "(no password)" }}",
+                                        modifier = Modifier.padding(top = 8.dp),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontFamily = FontFamily.Monospace,
+                                    )
+                                    state.camera.mac?.let {
+                                        Text("MAC: $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+                                    }
                                 }
                             }
                         }
@@ -206,18 +213,20 @@ fun BlePairingScreen(
                             modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                         ) {
-                            Column(Modifier.padding(16.dp)) {
-                                Text("⚠ Unable to retrieve assigned credentials", style = MaterialTheme.typography.labelMedium)
-                                Text(
-                                    "Use the factory login to add the camera by IP address. Once added, you can change the password.",
-                                    modifier = Modifier.padding(top = 8.dp),
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                Text(
-                                    "Factory login: admin / (no password)",
-                                    modifier = Modifier.padding(top = 12.dp),
-                                    style = MaterialTheme.typography.titleSmall,
-                                )
+                            SelectionContainer {
+                                Column(Modifier.padding(16.dp)) {
+                                    Text("⚠ Unable to retrieve assigned credentials", style = MaterialTheme.typography.labelMedium)
+                                    Text(
+                                        "Use the factory login to add the camera by IP address. Once added, you can change the password.",
+                                        modifier = Modifier.padding(top = 8.dp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    Text(
+                                        "Factory login: admin / (no password)",
+                                        modifier = Modifier.padding(top = 12.dp),
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                }
                             }
                         }
                     } else {

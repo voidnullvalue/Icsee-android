@@ -58,24 +58,22 @@ the provisioning ACK was missed; that was wrong.
 
 Consequences for this app:
 
-- **Password and username change are both offered anyway**, on the reasoning
-  that even though they can't remove the backdoor, they're not security
-  theatre either -- they do change what the *real* account's credentials are,
-  which matters for anyone relying on those credentials specifically (and for
-  keeping the login this app stores in sync with the device). Both verify by
-  re-login and report honestly if a change doesn't actually take, rather than
-  trusting the device's `Ret:100` ACK at face value.
-- **Password change** implements the full two-step mechanism from
-  `PASSWORD_CHANGE_RE.md` (plaintext `ModifyPassword` + a `System.ExUserMap`
-  read-modify-write with the `u()` obfuscation) in
-  `DeviceManagementViewModel.changePassword` -- not yet live-verified on
-  hardware as of this writing. An earlier version only did the first step,
-  which reliably failed to change login on any account checked against
-  `PasswordV2` (which, per the finding above, is effectively all of them).
+- **Password change works and is live-verified** (2026-07-07), via
+  `ChangeRandomUser` (msg 1660, a session-less command -- see
+  `PASSWORD_CHANGE_RE.md`), against the real `xkfu` account on an
+  already-provisioned camera: old password rejected afterward, new password
+  authenticates. Two other candidate mechanisms in the vendor source
+  (`ModifyPassword` alone, and `ModifyPassword` + a `System.ExUserMap`
+  read-modify-write with the documented `u()` obfuscation) were tried first
+  and confirmed NOT to work despite ACKing `Ret:100` -- see
+  `PASSWORD_CHANGE_RE.md` for the full comparison. `changePassword` verifies
+  by re-login before persisting regardless of which ACK it gets, so none of
+  this testing risked the working credentials.
 - **Username change** (`ModifyUser`) is live-confirmed working.
-- Regardless of either: the blank-`admin` backdoor stands independent of
-  what `xkfu` (or any other account)'s password is, so it does not "secure"
-  the device in any real sense -- see above.
+- Neither changes the blank-`admin` backdoor, which stands independent of any
+  other account's password -- so this app still cannot make the device fully
+  secure, but it CAN now give the user real control over the one account that
+  isn't a hardcoded bypass.
 
 ### Provisioning ACK not reliably captured (no longer blocks credential display)
 

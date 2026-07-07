@@ -228,19 +228,23 @@ fun CameraSettingsScreen(
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Text("Real Account Credentials Found:", style = androidx.compose.material3.MaterialTheme.typography.labelSmall)
-                        Text(
-                            "Username: $username",
-                            modifier = Modifier.padding(top = 8.dp),
-                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        )
-                        state.retrievedPassword?.let { password ->
-                            Text(
-                                "Password: $password",
-                                modifier = Modifier.padding(top = 6.dp),
-                                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            )
+                        SelectionContainer {
+                            Column {
+                                Text(
+                                    "Username: $username",
+                                    modifier = Modifier.padding(top = 8.dp),
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                )
+                                state.retrievedPassword?.let { password ->
+                                    Text(
+                                        "Password: $password",
+                                        modifier = Modifier.padding(top = 6.dp),
+                                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    )
+                                }
+                            }
                         }
                         Button(
                             onClick = { viewModel.update { it.copy(username = username, password = state.retrievedPassword ?: "") } },

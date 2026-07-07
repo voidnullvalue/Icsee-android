@@ -34,18 +34,22 @@ This document tracks which protocol features have been live-confirmed against a 
 - Reboot device (OPMachine)
 - Username change (`ModifyUser`, msg 1484) — **live-confirmed**: rename applies,
   re-login under the new name succeeds. User list via `GetAllUser` (msg 1472).
-- Change device password — **implemented, not yet live-verified.** Both
-  reverse-engineered steps are wired up: plaintext `ModifyPassword` (msg 1040)
-  + a `System.ExUserMap` read-modify-write whose Password uses the vendor
-  `u()` obfuscation = `"0001"+base64(pw)` with the first two chars swapped
-  (see PASSWORD_CHANGE_RE.md, `XiongmaiCrypto.obfuscateExUserMapPassword`).
-  An earlier version only sent `ModifyPassword`, predating discovery of the
-  `ExUserMap` step, and reliably failed to actually change login. The device
-  still has an unremovable blank-`admin` LAN backdoor (SECURITY.md) regardless
-  of any account's password.
-- BLE pairing credential setting (ChangeRandomUser, msg 1660) — client ready;
-  reliant on capturing the provisioning ACK (BLE now requests the fastest
-  connection interval to improve capture).
+- Change device password — **live-confirmed working 2026-07-07** via
+  `ChangeRandomUser` (msg 1660/1661, session-less), against the real `xkfu`
+  account on an already-provisioned camera: old password rejected afterward,
+  new password authenticates. Two other reverse-engineered candidates
+  (`ModifyPassword` alone; `ModifyPassword` + a `System.ExUserMap`
+  read-modify-write with the documented `u()` obfuscation) were tried first
+  and confirmed NOT to work despite both ACKing `Ret:100` — see
+  PASSWORD_CHANGE_RE.md for the full comparison table; neither is used by the
+  app. `changePassword` verifies by re-login before persisting regardless.
+  The device still has an unremovable blank-`admin` LAN backdoor
+  (SECURITY.md) regardless of any account's password.
+- BLE pairing credential setting (ChangeRandomUser, msg 1660) — same client
+  (`ChangeRandomUserClient`) as device-management password change above; ready
+  for the fresh-pairing case, reliant on capturing the provisioning ACK there
+  specifically (BLE now requests the fastest connection interval to improve
+  capture).
 - Real-account credential retrieval (GetRandomUser, msg 1660) — **live-confirmed**,
   independent of ACK capture; used both right after BLE pairing and on-demand from the
   camera settings screen ("Retrieve Credentials").

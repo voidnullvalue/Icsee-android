@@ -7,10 +7,10 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.voidnullvalue.icseelocal.app.IcseeApplication
+import com.voidnullvalue.icseelocal.config.ChangeRandomUserClient
 import com.voidnullvalue.icseelocal.config.ConfigResult
 import com.voidnullvalue.icseelocal.config.DvripConfigChannel
 import com.voidnullvalue.icseelocal.config.SystemInfo
-import com.voidnullvalue.icseelocal.config.XiongmaiCrypto
 import com.voidnullvalue.icseelocal.crypto.SofiaHash
 import com.voidnullvalue.icseelocal.dvrip.DvripFrame
 import com.voidnullvalue.icseelocal.dvrip.DvripMessageIds
@@ -38,10 +38,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
@@ -375,101 +373,44 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
     }
 
     /**
-     * Two-step mechanism fully reverse-engineered in PASSWORD_CHANGE_RE.md, both
-     * steps required -- an earlier version of this function only did the first and
-     * silently failed on any account whose login is checked against `PasswordV2`:
-     *
-     * 1. `ModifyPassword` (no `@ConfigJsonNameLink` in the decompiled vendor source --
-     *    invoked with a native-resolved cmdId of -1 -- but every other confirmed-live
-     *    named command uses the identical `{"Name":X,"X":{...},"SessionID":...}`
-     *    envelope over [DvripMessageIds.CONFIG_SET], so it's sent the same way here).
-     *    Updates the legacy SofiaHash login store; field names come from the vendor's
-     *    `DevPsdManageActivity`.
-     * 2. `System.ExUserMap` read-modify-write: fetch the current user list, overwrite
-     *    the matching account's `Password` with the vendor's `u()` obfuscation
-     *    (`XiongmaiCrypto.obfuscateExUserMapPassword` -- NOT encryption, just
-     *    `"0001" + base64(pw)` with the first two chars swapped), write it back. The
-     *    device derives a fresh `PasswordV2` from this and *that's* what login
-     *    actually checks -- confirmed live: `ModifyPassword` alone ACKs `Ret:100`
-     *    but the password never actually changes.
-     *
-     * On success, persists the new credentials to [CameraStore] so the rest of the
-     * app keeps working.
+     * `ChangeRandomUser` (msg 1660/1661) -- the vendor's `SetDevPsdActivity`
+     * mechanism, sent over a throwaway **session-less** connection (no login,
+     * no `SessionID`; see `ChangeRandomUserClient`). Two earlier approaches
+     * were tried and both confirmed NOT to work against a real (non-`admin`)
+     * account: legacy `ModifyPassword` alone, and `ModifyPassword` + a
+     * `System.ExUserMap` read-modify-write with the vendor's `u()` password
+     * obfuscation (both ACK `Ret:100` but the resulting `PasswordV2` never
+     * authenticates the new password -- see PASSWORD_CHANGE_RE.md "live-tested
+     * against xkfu"). `ChangeRandomUser` is the one that's **live-verified
+     * working** (2026-07-07): old password rejected, new password
+     * authenticates, immediately, no factory reset needed. Because it doesn't
+     * use the shared session at all, it also doesn't touch the per-camera
+     * Ret:205 login-rate budget.
      */
     fun changePassword(newPassword: String) {
-        val manager = sessionManager ?: return
-        val transport = manager.controlTransport ?: return
-        val channel = manager.commandChannel ?: return
-        val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
         val cam = camera ?: return
         val creds = credentials ?: return
         viewModelScope.launch {
             _state.value = _state.value.copy(busy = true, passwordChangeInFlight = true)
             runCatching {
-                val sidHex = "0x%08x".format(sid.toLong())
-
-                // Step 1: legacy ModifyPassword (SofiaHash store).
-                // Passwords are ALWAYS SofiaHash-ed, including an empty one --
-                // see the note in DvripLoginNegotiator.buildLoginRequestJson.
-                // (Verified live: the no-password admin account authenticates
-                // with SofiaHash.hash(""), not a literal empty string.)
-                val modifyBody = buildJsonObject {
-                    put("EncryptType", "MD5")
-                    put("UserName", creds.username)
-                    put("PassWord", SofiaHash.hash(creds.password))
-                    put("NewPassWord", SofiaHash.hash(newPassword))
-                }
-                val modifyJson = buildJsonObject {
-                    put("Name", "ModifyPassword")
-                    put("ModifyPassword", modifyBody)
-                    put("SessionID", sidHex)
-                }.toString()
-                val modifyText = sendAndAwait(transport, channel, DvripMessageIds.CONFIG_SET, DvripMessageIds.CONFIG_SET_RESPONSE, modifyJson)
-                val modifyRet = modifyText?.let { Regex("\"Ret\"\\s*:\\s*(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
-                if (modifyRet != 100) {
-                    _state.value = _state.value.copy(errorMessage = "Password change rejected by the camera (Ret=$modifyRet)")
+                val result = ChangeRandomUserClient.changeUser(
+                    host = cam.host,
+                    port = cam.dvripPort,
+                    currentRandomName = creds.username,
+                    currentRandomPassword = creds.password,
+                    newUsername = creds.username,
+                    newPassword = newPassword,
+                )
+                if (result !is ChangeRandomUserClient.Result.Success) {
+                    val detail = (result as? ChangeRandomUserClient.Result.Failure)?.detail
+                    val ret = (result as? ChangeRandomUserClient.Result.Failure)?.ret
+                    _state.value = _state.value.copy(errorMessage = "Password change rejected by the camera (Ret=$ret${detail?.let { ": $it" } ?: ""})")
                     return@runCatching
                 }
 
-                // Step 2: System.ExUserMap read-modify-write with the u()-obfuscated
-                // password -- this is the store login is actually checked against.
-                val getJson = buildJsonObject { put("Name", "System.ExUserMap"); put("SessionID", sidHex) }.toString()
-                val getText = sendAndAwait(transport, channel, DvripMessageIds.CONFIG_GET, DvripMessageIds.CONFIG_GET_RESPONSE, getJson)
-                val userMap = getText?.let { Json.parseToJsonElement(it) as? JsonObject }?.get("System.ExUserMap")?.jsonObject
-                val users = userMap?.get("User")?.jsonArray
-                if (users == null) {
-                    _state.value = _state.value.copy(errorMessage = "Could not read System.ExUserMap from the camera; password store not updated")
-                    return@runCatching
-                }
-                val obfuscated = XiongmaiCrypto.obfuscateExUserMapPassword(newPassword)
-                val updatedUsers = users.map { entry ->
-                    val obj = entry as JsonObject
-                    if (obj["Name"]?.jsonPrimitive?.content == creds.username) {
-                        JsonObject(obj.toMutableMap().apply { put("Password", JsonPrimitive(obfuscated)) })
-                    } else {
-                        obj
-                    }
-                }
-                val setJson = buildJsonObject {
-                    put("Name", "System.ExUserMap")
-                    put("System.ExUserMap", buildJsonObject {
-                        put("User", JsonArray(updatedUsers))
-                        put("UserNum", userMap["UserNum"] ?: JsonPrimitive(updatedUsers.size))
-                    })
-                    put("SessionID", sidHex)
-                }.toString()
-                val setText = sendAndAwait(transport, channel, DvripMessageIds.CONFIG_SET, DvripMessageIds.CONFIG_SET_RESPONSE, setJson)
-                val setRet = setText?.let { Regex("\"Ret\"\\s*:\\s*(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
-                if (setRet != 100) {
-                    _state.value = _state.value.copy(errorMessage = "System.ExUserMap write rejected by the camera (Ret=$setRet); password store not fully updated")
-                    return@runCatching
-                }
-
-                // Ret:100 on both writes is still not proof the change applied --
-                // verify by actually re-authenticating with the new password. The
-                // credential change invalidates the current session anyway, so
-                // reconnecting is required regardless; doing it *as* the verification
-                // (instead of a separate throwaway login) is one login, not two.
+                // Ret:100 alone is not proof enough given this firmware's history --
+                // verify by actually re-authenticating with the new password before
+                // persisting or reporting success.
                 val newCreds = CameraCredentials(creds.username, newPassword)
                 if (reconnectAndAwait(cam, newCreds)) {
                     store.save(cam, newCreds)
@@ -480,9 +421,8 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                     // session under the still-working old credentials.
                     reconnectAndAwait(cam, creds)
                     _state.value = _state.value.copy(
-                        errorMessage = "The camera accepted both writes but the new password still does not " +
-                            "authenticate. Password unchanged; this account may behave like the unremovable " +
-                            "admin/blank backdoor -- see SECURITY.md.",
+                        errorMessage = "The camera accepted the change but the new password still does not " +
+                            "authenticate. Password left as-is in local storage.",
                     )
                 }
             }.onFailure { _state.value = _state.value.copy(errorMessage = it.message ?: "Password change failed") }

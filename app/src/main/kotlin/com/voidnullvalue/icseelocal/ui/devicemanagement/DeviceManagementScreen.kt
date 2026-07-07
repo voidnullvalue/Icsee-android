@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -72,13 +73,17 @@ fun DeviceManagementScreen(
                 if (info == null) {
                     Text("Not loaded yet", style = MaterialTheme.typography.bodySmall)
                 } else {
-                    InfoRow("Model", info.deviceModel)
-                    InfoRow("Hardware", "${info.hardware} (rev ${info.hardwareVersion})")
-                    InfoRow("Firmware", info.softwareVersion)
-                    InfoRow("Build", info.buildTime)
-                    InfoRow("Serial", info.serialNo)
-                    InfoRow("PID", info.pid)
-                    InfoRow("Uptime", formatUptime(info.deviceRunTimeSeconds))
+                    SelectionContainer {
+                        Column {
+                            InfoRow("Model", info.deviceModel)
+                            InfoRow("Hardware", "${info.hardware} (rev ${info.hardwareVersion})")
+                            InfoRow("Firmware", info.softwareVersion)
+                            InfoRow("Build", info.buildTime)
+                            InfoRow("Serial", info.serialNo)
+                            InfoRow("PID", info.pid)
+                            InfoRow("Uptime", formatUptime(info.deviceRunTimeSeconds))
+                        }
+                    }
                 }
             }
 
@@ -155,7 +160,7 @@ fun DeviceManagementScreen(
                     if (accounts.isEmpty()) {
                         Text("No accounts returned.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
                     } else {
-                        accounts.forEach { AccountRow(it) }
+                        SelectionContainer { Column { accounts.forEach { AccountRow(it) } } }
                     }
                 }
             }
