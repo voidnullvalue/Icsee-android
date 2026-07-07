@@ -74,20 +74,29 @@ This document tracks which protocol features have been live-confirmed against a 
 - **Race-safe request/response**: Subscribe to DvripTransport.incomingFrames BEFORE sending (matches DvripLoginNegotiator)
 - **Generic JSON editing**: EditableJson tree model covers all named configs without per-config UI
 - **Post-BLE-provision credential setting**: ChangeRandomUserClient standalone, no prior session needed
-- **Single shared, rate-limited session per camera**: `CameraSessionRegistry`
-  (app-scoped) owns one `CameraSessionManager` per `host:port`, reference-counted
-  across the live-view and device-management screen families with a short linger
-  before teardown, and a per-camera `LoginRateLimiter` that survives manager
-  rebuilds. This firmware counts login *rate* toward its Ret:205 lockout, so the
-  whole app authenticates as rarely as possible and never in the background.
+- **Single shared session per camera**: `CameraSessionRegistry` (app-scoped)
+  owns one `CameraSessionManager` per `host:port`, reference-counted across the
+  live-view and device-management screen families with a short linger before
+  teardown, and a per-camera `LoginRateLimiter` that survives manager rebuilds
+  and caps total logins in a rolling window (a cheap backstop against any code
+  path looping logins unboundedly). The whole app authenticates as rarely as
+  possible and never in the background.
+- **Update 2026-07-07**: `LoginRateLimiter` used to also enforce a minimum
+  spacing between individual logins (added when Ret:205 looked burst-sensitive
+  -- a handful of logins in a few seconds tripping it even though that's tiny
+  over any longer window). Live testing now points to Ret:205 actually being
+  the firmware time-expiring the `admin`/blank backdoor specifically (see
+  `[[project-icsee-password-change]]`), not a pure login-rate lockout -- the
+  spacing guard was solving a problem that likely wasn't the one causing the
+  originally-reported symptom. Removed; only the rolling-window count remains.
 
 ## Auth-rate reduction — open investigation
 - **`AdminToken` (login response, msg 1001)**: captured onto `AuthenticatedSession`
   (`adminToken`) but not yet used. **Open question:** does presenting it permit
   token-based *session resumption* on a fresh TCP connection instead of a full
-  password login? If so, the unavoidable socket-death reconnects could stop
-  counting against the Ret:205 login-rate budget — the single biggest remaining
-  lever. Needs a live camera to probe (send a resumed-session frame carrying the
+  password login? Less urgent now that Ret:205 looks more like account-specific
+  expiry than a login-rate budget (see above), but still worth confirming.
+  Needs a live camera to probe (send a resumed-session frame carrying the
   token on a new socket and see whether commands are accepted without a msg-1000
   login). Not evidenced yet either way.
 - **Discovery no longer authenticates**: the subnet sweep discriminator is now a

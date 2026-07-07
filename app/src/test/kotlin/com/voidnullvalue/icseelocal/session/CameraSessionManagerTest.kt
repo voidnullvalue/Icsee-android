@@ -51,7 +51,7 @@ class CameraSessionManagerTest {
             "127.0.0.1", server.localPort,
             // Permissive limiter: these tests exercise the state machine / sequence
             // handling with rapid back-to-back logins, not the Ret:205 rate ceiling.
-            loginRateLimiter = LoginRateLimiter(minIntervalMillis = 0, maxAttempts = 100),
+            loginRateLimiter = LoginRateLimiter(maxAttempts = 100),
         )
 
         manager.connect(CameraCredentials("testuser", "hunter2"))
@@ -106,7 +106,7 @@ class CameraSessionManagerTest {
             "127.0.0.1", server.localPort,
             // Permissive limiter: these tests exercise the state machine / sequence
             // handling with rapid back-to-back logins, not the Ret:205 rate ceiling.
-            loginRateLimiter = LoginRateLimiter(minIntervalMillis = 0, maxAttempts = 100),
+            loginRateLimiter = LoginRateLimiter(maxAttempts = 100),
         )
         manager.connect(CameraCredentials("testuser", "hunter2"))
         withTimeout(5000) {
@@ -168,7 +168,7 @@ class CameraSessionManagerTest {
             "127.0.0.1", server.localPort,
             // Permissive limiter: these tests exercise the state machine / sequence
             // handling with rapid back-to-back logins, not the Ret:205 rate ceiling.
-            loginRateLimiter = LoginRateLimiter(minIntervalMillis = 0, maxAttempts = 100),
+            loginRateLimiter = LoginRateLimiter(maxAttempts = 100),
         )
 
         manager.connect(CameraCredentials("testuser", "hunter2"))
