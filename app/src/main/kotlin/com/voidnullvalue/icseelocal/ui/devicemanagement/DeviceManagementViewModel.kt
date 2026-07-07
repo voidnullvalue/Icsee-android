@@ -35,7 +35,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -58,6 +60,48 @@ data class RecordedFile(
     val sizeText: String,
 )
 
+/**
+ * One account as reported by `GetAllUser` (msg 1472). [memo] is the telling field
+ * on this firmware: the blank-password `admin` backdoor carries `"factory test
+ * account"`, while the real per-device admin (a random name like `xkfu`) carries
+ * `"admin 's account"`. [hasPassword]/[hasPasswordV2] show whether a real
+ * credential is set without exposing it. Used to check whether the login we're
+ * using is the transient factory account rather than a real one.
+ */
+data class DeviceAccount(
+    val name: String,
+    val group: String,
+    val memo: String,
+    val reserved: Boolean,
+    val sharable: Boolean,
+    val hasPassword: Boolean,
+    val hasPasswordV2: Boolean,
+)
+
+/**
+ * Parses a `GetAllUser` (msg 1473) response body into accounts. Tolerant of missing
+ * fields and non-object entries. Pure/standalone so it's unit-testable without the
+ * Android ViewModel.
+ */
+fun parseDeviceAccounts(responseText: String): List<DeviceAccount> {
+    val root = runCatching { Json.parseToJsonElement(responseText) as? JsonObject }.getOrNull() ?: return emptyList()
+    val arr = root["Users"]?.jsonArray ?: return emptyList()
+    return arr.mapNotNull { el ->
+        val o = el as? JsonObject ?: return@mapNotNull null
+        fun s(k: String) = o[k]?.jsonPrimitive?.contentOrNull ?: ""
+        fun b(k: String) = o[k]?.jsonPrimitive?.booleanOrNull ?: false
+        DeviceAccount(
+            name = s("Name"),
+            group = s("Group"),
+            memo = s("Memo"),
+            reserved = b("Reserved"),
+            sharable = b("Sharable"),
+            hasPassword = s("Password").isNotEmpty(),
+            hasPasswordV2 = s("PasswordV2").isNotEmpty(),
+        )
+    }
+}
+
 data class DeviceManagementUiState(
     val connectionState: ConnectionState = ConnectionState.Disconnected,
     val systemInfo: SystemInfo? = null,
@@ -72,6 +116,8 @@ data class DeviceManagementUiState(
     val formatRequested: Boolean = false,
     val recordings: List<RecordedFile>? = null,
     val recordingsQuerying: Boolean = false,
+    val accounts: List<DeviceAccount>? = null,
+    val accountsQuerying: Boolean = false,
 )
 
 class DeviceManagementViewModel(application: Application) : AndroidViewModel(application), DefaultLifecycleObserver {
@@ -584,6 +630,35 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
             )
         }
     }
+
+    /**
+     * Reads the camera's account list (`GetAllUser`, msg 1472) so we can see whether
+     * the login we're using is the transient blank-password `admin` "factory test
+     * account" versus a real per-device account (random name, memo "admin 's
+     * account"). This is a diagnostic for the "the factory account idles out after
+     * provisioning, which is why login dies after a while" theory -- see [DeviceAccount].
+     */
+    fun loadAccounts() {
+        val manager = sessionManager ?: return
+        val transport = manager.controlTransport ?: return
+        val channel = manager.commandChannel ?: return
+        val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(accountsQuerying = true, errorMessage = null)
+            runCatching {
+                val sidHex = "0x%08x".format(sid.toLong())
+                val text = sendAndAwait(
+                    transport, channel,
+                    DvripMessageIds.USER_GET_ALL, DvripMessageIds.USER_GET_ALL_RESPONSE,
+                    buildJsonObject { put("Name", "GetAllUser"); put("SessionID", sidHex) }.toString(),
+                )
+                _state.value = _state.value.copy(accounts = text?.let { parseAccounts(it) } ?: emptyList())
+            }.onFailure { _state.value = _state.value.copy(errorMessage = it.message ?: "Account query failed", accounts = emptyList()) }
+            _state.value = _state.value.copy(accountsQuerying = false)
+        }
+    }
+
+    private fun parseAccounts(responseText: String): List<DeviceAccount> = parseDeviceAccounts(responseText)
 
     suspend fun getConfigMetadata(configName: String) = configChannel?.getCachedMetadata(configName)
 

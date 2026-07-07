@@ -137,6 +137,29 @@ fun DeviceManagementScreen(
                 }
             }
 
+            // -- Accounts (diagnostic: which account are we actually on?) --
+            SectionCard(title = "Accounts on this camera") {
+                Text(
+                    "Shows the camera's own account list. The blank-password \"admin\" backdoor is " +
+                        "flagged \"factory test account\"; the real per-device admin is a random name.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(
+                    onClick = { viewModel.loadAccounts() },
+                    enabled = state.connectionState is ConnectionState.Authenticated && !state.accountsQuerying,
+                    modifier = Modifier.padding(top = 8.dp),
+                ) { Text(if (state.accountsQuerying) "Reading…" else "Show accounts") }
+
+                state.accounts?.let { accounts ->
+                    if (accounts.isEmpty()) {
+                        Text("No accounts returned.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                    } else {
+                        accounts.forEach { AccountRow(it) }
+                    }
+                }
+            }
+
             // -- Reboot --
             SectionCard(title = "Power") {
                 Button(onClick = { viewModel.requestReboot() }) { Text("Reboot camera") }
@@ -189,6 +212,34 @@ private fun InfoRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 8.dp))
         Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun AccountRow(account: DeviceAccount) {
+    val isFactoryTest = account.memo.contains("factory test", ignoreCase = true)
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+        Row {
+            Text(account.name.ifBlank { "(unnamed)" }, style = MaterialTheme.typography.titleSmall)
+            if (isFactoryTest) {
+                Text(
+                    "  ⚠ factory test",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+        if (account.memo.isNotBlank()) {
+            Text("memo: ${account.memo}", style = MaterialTheme.typography.bodySmall)
+        }
+        Text(
+            "group: ${account.group.ifBlank { "-" }}   " +
+                "password: ${if (account.hasPassword || account.hasPasswordV2) "set" else "blank"}" +
+                (if (account.reserved) "   reserved" else "") +
+                (if (account.sharable) "   sharable" else ""),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
