@@ -231,12 +231,23 @@ class CameraSettingsViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
+    /**
+     * Retrieves the real (non-`admin`) account via `GetRandomUser`, which needs a
+     * real login first -- but `admin`/blank isn't guaranteed to still work: it
+     * time-expires into `Ret:205` some while after provisioning, independent of
+     * app/user activity (see SECURITY.md "unremovable blank-password admin
+     * backdoor"). So this tries a short list of candidate logins in order rather
+     * than assuming `admin`/blank: the classic factory default first (cheapest,
+     * most likely to still be open on a recently-provisioned camera), then
+     * whatever is currently saved for this camera (which may already be the real
+     * account's password from a previous successful retrieval or password
+     * change), then whatever's currently typed into the form. Stops at the first
+     * one that actually works.
+     */
     fun retrieveRealCredentials() {
         val s = _state.value
-        if (s.host.isBlank() || s.username.isBlank()) {
-            _state.value = _state.value.copy(
-                retrieveCredsError = "Host and admin username required. Use admin account and no-password to query."
-            )
+        if (s.host.isBlank()) {
+            _state.value = _state.value.copy(retrieveCredsError = "Host required.")
             return
         }
 
@@ -244,10 +255,23 @@ class CameraSettingsViewModel(application: Application) : AndroidViewModel(appli
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 runCatching {
-                    Log.d("CameraSettingsViewModel", "Retrieving real credentials from ${s.host}")
+                    val saved = if (s.isExisting) store.credentialsFor(s.id) else null
+                    val candidates = listOf(
+                        "admin" to "",
+                        saved?.username to saved?.password,
+                        s.username to s.password,
+                    ).mapNotNull { (u, p) -> if (!u.isNullOrBlank()) u to (p ?: "") else null }
+                        .distinct()
+
+                    Log.d("CameraSettingsViewModel", "Retrieving real credentials from ${s.host}, trying ${candidates.size} candidate login(s)")
                     val client = DvrIpClient(s.host, s.dvripPort.toIntOrNull() ?: 34567)
-                    val creds = client.queryRandomUserCredentials(s.username, s.password)
-                        ?: throw Exception("Could not retrieve or decrypt the provisioned account")
+                    val creds = candidates.firstNotNullOfOrNull { (username, password) ->
+                        client.queryRandomUserCredentials(username, password)
+                    } ?: throw Exception(
+                        "Could not log in with any known credentials (tried ${candidates.size}), or " +
+                            "could not decrypt the provisioned account. The admin/blank factory login " +
+                            "may have timed out -- see SECURITY.md.",
+                    )
                     Log.d("CameraSettingsViewModel", "Successfully retrieved ${creds.first} credentials")
                     creds
                 }.onSuccess { (username, password) ->
