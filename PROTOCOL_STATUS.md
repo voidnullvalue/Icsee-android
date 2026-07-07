@@ -84,21 +84,27 @@ This document tracks which protocol features have been live-confirmed against a 
 - **Update 2026-07-07**: `LoginRateLimiter` used to also enforce a minimum
   spacing between individual logins (added when Ret:205 looked burst-sensitive
   -- a handful of logins in a few seconds tripping it even though that's tiny
-  over any longer window). Live testing now points to Ret:205 actually being
-  the firmware time-expiring the `admin`/blank backdoor specifically (see
-  `[[project-icsee-password-change]]`), not a pure login-rate lockout -- the
-  spacing guard was solving a problem that likely wasn't the one causing the
-  originally-reported symptom. Removed; only the rolling-window count remains.
+  over any longer window). **Live-confirmed** (not just theorized): the
+  `admin`/blank backdoor hits Ret:205 purely from elapsed time since
+  provisioning, with no real usage from the app or user in between -- see
+  `[[project-icsee-password-change]]`. The spacing guard was solving a problem
+  that wasn't causing the originally-reported symptom for that account, so
+  it's been removed for `admin`. **Caveat: `Ret:205` is very likely a generic,
+  reused error code**, not a single cause -- confirming it fires from pure
+  time-elapsed for the backdoor account does NOT rule out a genuine
+  login-rate lockout also existing (possibly for other accounts, or under
+  different conditions). This is why the rolling-window count backstop was
+  kept rather than removing rate limiting entirely.
 
 ## Auth-rate reduction — open investigation
 - **`AdminToken` (login response, msg 1001)**: captured onto `AuthenticatedSession`
   (`adminToken`) but not yet used. **Open question:** does presenting it permit
   token-based *session resumption* on a fresh TCP connection instead of a full
-  password login? Less urgent now that Ret:205 looks more like account-specific
-  expiry than a login-rate budget (see above), but still worth confirming.
-  Needs a live camera to probe (send a resumed-session frame carrying the
-  token on a new socket and see whether commands are accepted without a msg-1000
-  login). Not evidenced yet either way.
+  password login? Needs a live camera to probe (send a resumed-session frame
+  carrying the token on a new socket and see whether commands are accepted
+  without a msg-1000 login). Not evidenced yet either way. Note this only
+  helps if a genuine login-rate lockout exists separately from the confirmed
+  `admin`-expiry cause above (see caveat).
 - **Discovery no longer authenticates**: the subnet sweep discriminator is now a
   msg-1010 pre-login negotiate (answered by msg 1011 with no login), not a msg-1000
   login, and already-saved camera IPs are skipped entirely.

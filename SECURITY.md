@@ -22,19 +22,38 @@ Reverse-engineering the vendor app and live-testing the target camera
 established that the device has an `admin` account with a **blank password
 that always authenticates over DVRIP on the LAN and cannot be secured**:
 
-- `admin`/(no password) returns `Ret:100` in every state tested, including a
-  reported factory-fresh state.
+- `admin`/(no password) returns `Ret:100` for a window after provisioning/
+  reset, including a reported factory-fresh state.
 - Every credential change applied to `admin` returns `Ret:100` but does not
   change authentication -- verified live for `ModifyPassword` (msg 1040),
   `ModifyUser` (msg 1484), and a `System.ExUserMap` write (msg 1040). The
   device even generates a fresh `PasswordV2` blob from the written value, yet
-  `admin`/blank still logs in. The account's own metadata labels it
-  `Memo: "factory test account"`.
+  `admin`/blank still logs in (while the window above is open). The account's
+  own metadata labels it `Memo: "factory test account"`.
+- **Live-confirmed (2026-07-07): the window is time-limited, not
+  permanent.** `admin`/blank started returning `Ret:205` purely from elapsed
+  time since provisioning, with no real app or user activity against it in
+  between -- see `[[project-icsee-password-change]]` and PROTOCOL_STATUS.md
+  "Auth-rate reduction". `Ret:205` is very likely a generic/reused error
+  code, so this doesn't rule out a genuine login-rate lockout also existing
+  under other conditions -- but for this specific symptom (backdoor account,
+  no real usage, locks out after some elapsed time), time is the cause, not
+  rate.
 
-So **anyone with LAN access has full DVRIP control with no credentials**,
-independent of configured passwords. This is classic Xiongmai default-account
-behaviour (the device family behind Mirai-era compromises) and is a firmware
-property, not fixable from a client.
+So **anyone with LAN access has full DVRIP control with no credentials for
+some window after provisioning/reset**, independent of configured passwords.
+Whether the window reopens (e.g. on factory reset) or the account is
+permanently spent afterward is not yet confirmed. This is classic Xiongmai
+default-account behaviour (the device family behind Mirai-era compromises)
+and is a firmware property, not fixable from a client.
+
+**Practical consequence for this app:** anything that logs in as `admin`/blank
+first (the BLE-pairing credential auto-query, and the settings "Retrieve
+Credentials" button, both of which use `GetRandomUser` -- see
+`[[project-icsee-random-user-decryption]]`) will stop working once this
+window closes, even though `xkfu`'s password itself remains recoverable in
+principle. `ChangeRandomUser` (the password-change mechanism) is unaffected
+since it's session-less and doesn't authenticate as anyone.
 
 The real administrative account is a random-named account (e.g. `xkfu`,
 `Memo: "admin 's account"`) provisioned with a per-device password. **That
