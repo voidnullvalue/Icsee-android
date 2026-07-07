@@ -83,11 +83,16 @@ class DvrIpClient(private val host: String, private val port: Int = 34567) {
                 Log.d("DvrIpClient", "Found ${arr.length()} users")
                 for (i in 0 until arr.length()) {
                     val user = arr.getJSONObject(i)
-                    users.add(UserAccount(
-                        name = user.optString("Name", ""),
-                        passwordV2 = user.optString("PasswordV2", null),
-                    ))
+                    val name = user.optString("Name", "")
+                    val pwv2 = user.optString("PasswordV2", null)
+                    Log.d("DvrIpClient", "  User[$i]: name=$name, hasPassword=${pwv2 != null}")
+                    users.add(UserAccount(name = name, passwordV2 = pwv2))
                 }
+            }
+
+            if (users.isEmpty()) {
+                Log.w("DvrIpClient", "No users returned in ExUserMap response")
+                Log.d("DvrIpClient", "Full response: ${userMapJson}")
             }
 
             Log.d("DvrIpClient", "Returning ${users.size} user accounts")
