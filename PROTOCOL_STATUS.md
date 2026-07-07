@@ -34,11 +34,15 @@ This document tracks which protocol features have been live-confirmed against a 
 - Reboot device (OPMachine)
 - Username change (`ModifyUser`, msg 1484) — **live-confirmed**: rename applies,
   re-login under the new name succeeds. User list via `GetAllUser` (msg 1472).
-- Change device password — **not offered.** Fully reverse-engineered (plaintext
-  `ModifyPassword` msg 1040 + a `System.ExUserMap` write whose Password uses the
-  vendor `u()` obfuscation = `"0001"+base64(pw)` with the first two chars
-  swapped; see PASSWORD_CHANGE_RE.md). Left unimplemented because the device has
-  an unremovable blank-`admin` LAN backdoor (SECURITY.md) that makes it moot.
+- Change device password — **implemented, not yet live-verified.** Both
+  reverse-engineered steps are wired up: plaintext `ModifyPassword` (msg 1040)
+  + a `System.ExUserMap` read-modify-write whose Password uses the vendor
+  `u()` obfuscation = `"0001"+base64(pw)` with the first two chars swapped
+  (see PASSWORD_CHANGE_RE.md, `XiongmaiCrypto.obfuscateExUserMapPassword`).
+  An earlier version only sent `ModifyPassword`, predating discovery of the
+  `ExUserMap` step, and reliably failed to actually change login. The device
+  still has an unremovable blank-`admin` LAN backdoor (SECURITY.md) regardless
+  of any account's password.
 - BLE pairing credential setting (ChangeRandomUser, msg 1660) — client ready;
   reliant on capturing the provisioning ACK (BLE now requests the fastest
   connection interval to improve capture).

@@ -61,7 +61,7 @@ A real, building, testable application. Verified live against the target camera:
 | PTZ presets | ✅ Verified live | `OPPTZControl` Set/Goto/Clear preset — `Ret: 100`. |
 | Device management | ✅ Verified live | SystemInfo, device time, reboot, and generic get/set of ~any named config (msg 1020/1042/1040). |
 | Username change | ✅ Verified live | `ModifyUser` (msg 1484) renames the account; re-login under the new name confirmed. |
-| Password change | ⛔ Not offered | Mechanism fully reverse-engineered (plaintext `ModifyPassword` + `System.ExUserMap`, see below) but the device has an **unremovable blank-`admin` LAN backdoor** that makes it moot. See [`SECURITY.md`](SECURITY.md). |
+| Password change | 🟡 Implemented, not yet live-verified | Full two-step mechanism (plaintext `ModifyPassword` + a `System.ExUserMap` read-modify-write with the vendor's `u()` password obfuscation, see below) wired up in `DeviceManagementViewModel.changePassword`; an earlier version only did the first step and silently didn't work. Note the device still has an **unremovable blank-`admin` LAN backdoor** regardless of any account's password — see [`SECURITY.md`](SECURITY.md). |
 | SD format / recordings list | 🟡 Built from spec | `OPStorageManager` format and `OPFileQuery` clip listing built from the decompiled vendor shapes; not yet confirmed against a live reply. Recorded-video *playback* is blocked by the same DVRIP media-byte gap as live view. |
 | LAN discovery | 🟡 Partial | Client probe frame byte-verified; beacon-response parsing implemented but not observed on this camera. |
 

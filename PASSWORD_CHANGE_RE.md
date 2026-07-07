@@ -65,13 +65,19 @@ that was wrong.)
 
 ## What this means for the app
 
-- The change protocol is plaintext and fully known — implementable directly
-  (`ModifyPassword` + `System.ExUserMap` write; `ChangeRandomUser` for the
-  no-login provisioning case).
+- The change protocol is plaintext and fully known, and **both steps are now
+  implemented** in `DeviceManagementViewModel.changePassword`
+  (`ModifyPassword` + the `System.ExUserMap` read-modify-write with `u()`).
+  An earlier version of that function only sent `ModifyPassword` -- written
+  before this file's `ExUserMap`/`u()` findings existed -- which reliably
+  failed to change login on any account whose password is checked against
+  `PasswordV2` (i.e. effectively all of them). Not yet live-verified against
+  hardware as of this writing.
 - It only takes effect for an account you're authenticated as with real creds.
-  On a **fresh / factory-reset** camera (blank real admin) the
-  `ModifyPassword`+`ExUserMap` path applies. On this already-provisioned test
-  unit we authenticate as the backdoor `admin`, so it can't be demonstrated
-  end-to-end here without a factory reset (or `xkfu`'s password).
+  Authenticating as the `admin` backdoor and changing *its* password is a
+  no-op regardless of which mechanism is used (see SECURITY.md) -- but doing
+  the same for `xkfu` (now that its real password is recoverable, see above)
+  should actually take effect, since `xkfu` isn't the hardcoded-bypass
+  account.
 - For securing a camera the user pairs through OUR app, the correct path is
   `ChangeRandomUser` at pairing time (we have the random creds then).

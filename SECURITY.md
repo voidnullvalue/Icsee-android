@@ -58,15 +58,24 @@ the provisioning ACK was missed; that was wrong.
 
 Consequences for this app:
 
-- **Password change is intentionally not implemented** -- given the backdoor it
-  would be security theatre, and on this hardware it does not even change the
-  login. The change-password UI verifies by re-login and reports honestly when
-  a change does not take, rather than faking success.
-- **Username change** (`ModifyUser`) works but is cosmetic while the backdoor
-  stands.
-- The full plaintext password-change mechanism (`ModifyPassword` +
-  `System.ExUserMap` with the `u()` obfuscation) is documented in
-  `PASSWORD_CHANGE_RE.md`.
+- **Password and username change are both offered anyway**, on the reasoning
+  that even though they can't remove the backdoor, they're not security
+  theatre either -- they do change what the *real* account's credentials are,
+  which matters for anyone relying on those credentials specifically (and for
+  keeping the login this app stores in sync with the device). Both verify by
+  re-login and report honestly if a change doesn't actually take, rather than
+  trusting the device's `Ret:100` ACK at face value.
+- **Password change** implements the full two-step mechanism from
+  `PASSWORD_CHANGE_RE.md` (plaintext `ModifyPassword` + a `System.ExUserMap`
+  read-modify-write with the `u()` obfuscation) in
+  `DeviceManagementViewModel.changePassword` -- not yet live-verified on
+  hardware as of this writing. An earlier version only did the first step,
+  which reliably failed to change login on any account checked against
+  `PasswordV2` (which, per the finding above, is effectively all of them).
+- **Username change** (`ModifyUser`) is live-confirmed working.
+- Regardless of either: the blank-`admin` backdoor stands independent of
+  what `xkfu` (or any other account)'s password is, so it does not "secure"
+  the device in any real sense -- see above.
 
 ### Provisioning ACK not reliably captured (no longer blocks credential display)
 

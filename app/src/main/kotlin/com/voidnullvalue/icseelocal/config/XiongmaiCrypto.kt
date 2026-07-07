@@ -1,6 +1,6 @@
 package com.voidnullvalue.icseelocal.config
 
-import android.util.Base64
+import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -30,7 +30,7 @@ object XiongmaiCrypto {
     fun decryptRandomUserInfo(infoBase64: String, serialNumber: String): Pair<String, String>? {
         val keyStr = deriveRandomUserKey(serialNumber) ?: return null
         return try {
-            val ciphertext = Base64.decode(infoBase64, Base64.DEFAULT)
+            val ciphertext = Base64.getDecoder().decode(infoBase64)
             val cipher = Cipher.getInstance("AES/CBC/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyStr.toByteArray(), "AES"), IvParameterSpec(ZERO_IV))
             val plaintext = String(cipher.doFinal(ciphertext), Charsets.US_ASCII)
@@ -41,5 +41,19 @@ object XiongmaiCrypto {
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * The vendor's `u()` obfuscation (`AbstractC4571f.u`, see PASSWORD_CHANGE_RE.md) for
+     * `System.ExUserMap`'s `Password` field. NOT encryption -- reversible with the same
+     * swap, and the device derives its own `PasswordV2` from whatever is written here.
+     * `u("") == ""`; otherwise `"0001" + base64(pw)` with the first two base64 chars
+     * swapped. Verified against the vendor's own example: `u("test1234") == "0001GdVzdDEyMzQ="`.
+     */
+    fun obfuscateExUserMapPassword(password: String): String {
+        if (password.isEmpty()) return ""
+        val b64 = Base64.getEncoder().encodeToString(password.toByteArray(Charsets.UTF_8))
+        val swapped = if (b64.length >= 2) "${b64[1]}${b64[0]}${b64.substring(2)}" else b64
+        return "0001$swapped"
     }
 }
