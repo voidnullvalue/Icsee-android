@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -126,20 +127,35 @@ fun BlePairingScreen(
                     }
                 }
                 is BlePairingUiState.Success -> {
-                    Text("Paired!", style = MaterialTheme.typography.titleMedium)
-                    Text("Camera joined the network at ${state.camera.host}", modifier = Modifier.padding(top = 4.dp))
-                    // Credentials the camera reported back in its provisioning ACK -- these
-                    // are what you log in with (username defaults to admin if the camera
-                    // didn't assign one). Surface them so they aren't lost.
-                    Text(
-                        "Login: ${state.camera.username} / ${state.camera.password.ifBlank { "(no password)" }}",
-                        modifier = Modifier.padding(top = 8.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    state.camera.mac?.let {
-                        Text("MAC: $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                    Text("✓ Paired", style = MaterialTheme.typography.titleMedium)
+                    Text("Camera joined the network at ${state.camera.host}", modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium)
+
+                    // Highlight the provisioned credentials prominently so they're not lost.
+                    // These come from the camera's ACK and will be saved when the user continues.
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("Your login credentials (saved on the camera):", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                "Username: ${state.camera.username}",
+                                modifier = Modifier.padding(top = 12.dp),
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                "Password: ${state.camera.password.ifBlank { "(no password)" }}",
+                                modifier = Modifier.padding(top = 8.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                            state.camera.mac?.let {
+                                Text("MAC: $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+                            }
+                        }
                     }
-                    Button(onClick = { onPaired(state.camera) }, modifier = Modifier.padding(top = 16.dp)) {
+
+                    Button(onClick = { onPaired(state.camera) }, modifier = Modifier.fillMaxWidth().padding(top = 24.dp)) {
                         Text("Continue to camera settings")
                     }
                 }
@@ -147,23 +163,30 @@ fun BlePairingScreen(
                     if (state.errorCode == CameraBlePairingClient.ERROR_PROVISIONED_NO_ACK) {
                         // Not a real failure: the credentials were sent and the camera is
                         // joining WiFi; it just didn't report back over Bluetooth.
-                        Text("Credentials sent", style = MaterialTheme.typography.titleMedium)
+                        Text("✓ Credentials sent to camera", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "The camera is joining your WiFi. It didn't report its details back " +
-                                "over Bluetooth, so use its factory login below once it's on the network:",
+                            "The camera is joining your WiFi network. Bluetooth dropped before it could report back, but the provisioning was successful.",
                             modifier = Modifier.padding(top = 8.dp),
                             style = MaterialTheme.typography.bodyMedium,
                         )
-                        Text(
-                            "Login: admin / (no password)",
-                            modifier = Modifier.padding(top = 8.dp),
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        Text(
-                            "You can set a password afterwards in camera settings.",
-                            modifier = Modifier.padding(top = 4.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text("⚠ Unable to retrieve assigned credentials", style = MaterialTheme.typography.labelMedium)
+                                Text(
+                                    "Use the factory login to add the camera by IP address. Once added, you can change the password.",
+                                    modifier = Modifier.padding(top = 8.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                Text(
+                                    "Factory login: admin / (no password)",
+                                    modifier = Modifier.padding(top = 12.dp),
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                            }
+                        }
                     } else {
                         val errorMessage = when (state.errorCode) {
                             CameraBlePairingClient.ERROR_BLUETOOTH_DISABLED -> "Bluetooth is disabled. Please enable Bluetooth and try again."
