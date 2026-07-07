@@ -9,6 +9,8 @@ import com.voidnullvalue.icseelocal.ble.BleWifiProvisionCodec
 import com.voidnullvalue.icseelocal.ble.CameraBlePairingClient
 import com.voidnullvalue.icseelocal.ble.CameraBleScanner
 import com.voidnullvalue.icseelocal.config.ChangeRandomUserClient
+import com.voidnullvalue.icseelocal.config.DvrIpClient
+import com.voidnullvalue.icseelocal.config.XiongmaiCrypto
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -73,8 +75,17 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             when (val ack = pairingClient.pair(address, ssid, password)) {
                 is BleWifiProvisionCodec.WifiConfigAck.Success -> {
+                    // Query xkfu credentials from camera (if available)
+                    val xkfuCreds = tryQueryXkfuCredentials(ack.ip, ack.assignedUsername, ack.assignedPassword)
                     _pairingState.value = BlePairingUiState.Success(
-                        BlePairedCamera(host = ack.ip, username = ack.assignedUsername, password = ack.assignedPassword, mac = ack.mac),
+                        BlePairedCamera(
+                            host = ack.ip,
+                            username = ack.assignedUsername,
+                            password = ack.assignedPassword,
+                            mac = ack.mac,
+                            xkfuUsername = xkfuCreds?.first,
+                            xkfuPassword = xkfuCreds?.second,
+                        ),
                     )
                 }
                 is BleWifiProvisionCodec.WifiConfigAck.Failure -> {
@@ -105,6 +116,31 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
                 val failure = result as ChangeRandomUserClient.Result.Failure
                 _credentialChangeState.value = CredentialChangeState.Failed(failure.detail ?: "Failed to set credentials")
             }
+        }
+    }
+
+    private suspend fun tryQueryXkfuCredentials(host: String, adminUsername: String, adminPassword: String): Pair<String, String>? {
+        return try {
+            val client = DvrIpClient(host, 34567)
+            val userMap = client.queryUserMap(adminUsername, adminPassword)
+
+            // Find any non-admin account (the real provisioned account)
+            val realAccount = userMap?.find {
+                it.name != "admin" && it.name != null && it.name.isNotBlank()
+            }
+
+            if (realAccount != null) {
+                val decryptedPassword = realAccount.passwordV2?.let { XiongmaiCrypto.decryptPasswordV2(it) }
+                if (decryptedPassword != null) {
+                    Pair(realAccount.name, decryptedPassword)
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
         }
     }
 

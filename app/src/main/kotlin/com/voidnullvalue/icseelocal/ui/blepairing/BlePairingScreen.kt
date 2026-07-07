@@ -132,25 +132,58 @@ fun BlePairingScreen(
 
                     // Highlight the provisioned credentials prominently so they're not lost.
                     // These come from the camera's ACK and will be saved when the user continues.
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text("Your login credentials (saved on the camera):", style = MaterialTheme.typography.labelMedium)
-                            Text(
-                                "Username: ${state.camera.username}",
-                                modifier = Modifier.padding(top = 12.dp),
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                            Text(
-                                "Password: ${state.camera.password.ifBlank { "(no password)" }}",
-                                modifier = Modifier.padding(top = 8.dp),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontFamily = FontFamily.Monospace,
-                            )
-                            state.camera.mac?.let {
-                                Text("MAC: $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+                    if (state.camera.xkfuUsername != null && state.camera.xkfuPassword != null) {
+                        // Show real provisioned account (not factory admin)
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text("Your login credentials (created during provisioning):", style = MaterialTheme.typography.labelMedium)
+                                Text(
+                                    "Username: ${state.camera.xkfuUsername}",
+                                    modifier = Modifier.padding(top = 12.dp),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    "Password: ${state.camera.xkfuPassword}",
+                                    modifier = Modifier.padding(top = 8.dp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontFamily = FontFamily.Monospace,
+                                )
+                                Text(
+                                    "⚠ Save these credentials! You'll need them to access the camera.",
+                                    modifier = Modifier.padding(top = 12.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                )
+                                state.camera.mac?.let {
+                                    Text("MAC: $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                                }
+                            }
+                        }
+                    } else {
+                        // Fallback: show admin account from ACK
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text("Your login credentials (from provisioning ACK):", style = MaterialTheme.typography.labelMedium)
+                                Text(
+                                    "Username: ${state.camera.username}",
+                                    modifier = Modifier.padding(top = 12.dp),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    "Password: ${state.camera.password.ifBlank { "(no password)" }}",
+                                    modifier = Modifier.padding(top = 8.dp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontFamily = FontFamily.Monospace,
+                                )
+                                state.camera.mac?.let {
+                                    Text("MAC: $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+                                }
                             }
                         }
                     }

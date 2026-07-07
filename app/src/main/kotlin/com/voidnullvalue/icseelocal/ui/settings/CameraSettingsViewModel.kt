@@ -119,13 +119,17 @@ class CameraSettingsViewModel(application: Application) : AndroidViewModel(appli
      * [loadFromDiscovery] -- nothing is persisted until the user hits Save.
      */
     fun loadFromBlePairing(paired: BlePairedCamera) {
+        // Prefer xkfu (real account) over admin if available
+        val username = paired.xkfuUsername ?: paired.username
+        val password = paired.xkfuPassword ?: paired.password
+
         _state.value = CameraSettingsUiState(
             id = paired.mac ?: paired.host,
             displayName = paired.host,
             host = paired.host,
             isExisting = false,
-            username = paired.username,
-            password = paired.password,
+            username = username,
+            password = password,
             mac = paired.mac,
         )
     }

@@ -6,4 +6,6 @@ data class BlePairedCamera(
     val username: String,
     val password: String,
     val mac: String?,
+    val xkfuUsername: String? = null,  // Real account (created during factory reset)
+    val xkfuPassword: String? = null,   // Decrypted from camera
 )
