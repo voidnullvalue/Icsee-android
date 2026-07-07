@@ -246,24 +246,10 @@ class CameraSettingsViewModel(application: Application) : AndroidViewModel(appli
                 runCatching {
                     Log.d("CameraSettingsViewModel", "Retrieving real credentials from ${s.host}")
                     val client = DvrIpClient(s.host, s.dvripPort.toIntOrNull() ?: 34567)
-                    val userMap = client.queryUserMap(s.username, s.password)
-
-                    // Find any non-admin account
-                    val realAccount = userMap?.find {
-                        it.name != "admin" && it.name != null && it.name.isNotBlank()
-                    }
-
-                    if (realAccount != null) {
-                        val decryptedPassword = realAccount.passwordV2?.let { XiongmaiCrypto.decryptPasswordV2(it) }
-                        if (decryptedPassword != null) {
-                            Log.d("CameraSettingsViewModel", "Successfully retrieved ${realAccount.name} credentials")
-                            Pair(realAccount.name, decryptedPassword)
-                        } else {
-                            throw Exception("Failed to decrypt password for ${realAccount.name}")
-                        }
-                    } else {
-                        throw Exception("No real account found (only admin)")
-                    }
+                    val creds = client.queryRandomUserCredentials(s.username, s.password)
+                        ?: throw Exception("Could not retrieve or decrypt the provisioned account")
+                    Log.d("CameraSettingsViewModel", "Successfully retrieved ${creds.first} credentials")
+                    creds
                 }.onSuccess { (username, password) ->
                     _state.value = _state.value.copy(
                         retrievingCreds = false,

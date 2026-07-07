@@ -1,36 +1,45 @@
 package com.voidnullvalue.icseelocal.config
 
 import android.util.Base64
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
+/**
+ * Reverse-engineered from libFunSDK.so's Fun_DecDevRandomUserInfo (called by the
+ * factory app's "GetRandomUser" flow, see [[project-icsee-ble-pairing]]).
+ *
+ * The device encrypts its randomly-provisioned account as AES-128-CBC with a
+ * zero IV, using a key built entirely from substrings of the device's own
+ * serial number: key = SN[5:11] + SN[1:7] + SN[8:12] (16 ASCII chars). The
+ * plaintext is a fixed-width, null-padded string: "p1:<user> p2:<pass> t:<token>".
+ */
 object XiongmaiCrypto {
-    // Xiongmai default XOR key for PasswordV2 decryption (found in all devices)
-    private val XOR_KEY = byteArrayOf(0x70.toByte(), 0x92.toByte(), 0x86.toByte(), 0x0e.toByte(), 0x89.toByte(), 0x63.toByte())
+    private val ZERO_IV = ByteArray(16)
+
+    fun deriveRandomUserKey(serialNumber: String): String? {
+        if (serialNumber.length < 12) return null
+        return serialNumber.substring(5, 11) + serialNumber.substring(1, 7) + serialNumber.substring(8, 12)
+    }
 
     /**
-     * Decrypt Xiongmai PasswordV2 field using XOR with hardcoded key.
-     * The PasswordV2 field contains the plaintext password XOR'd with a repeating key,
-     * padded to 16 bytes with encryption metadata.
+     * Decrypts the base64 "Info"/"InfoUser" field returned by the GetRandomUser
+     * DVRIP command, returning (username, password) if the expected
+     * "p1:... p2:... t:..." format is found.
      */
-    fun decryptPasswordV2(passwordV2Base64: String): String? = try {
-        val ciphertext = Base64.decode(passwordV2Base64, Base64.DEFAULT)
+    fun decryptRandomUserInfo(infoBase64: String, serialNumber: String): Pair<String, String>? {
+        val keyStr = deriveRandomUserKey(serialNumber) ?: return null
+        return try {
+            val ciphertext = Base64.decode(infoBase64, Base64.DEFAULT)
+            val cipher = Cipher.getInstance("AES/CBC/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyStr.toByteArray(), "AES"), IvParameterSpec(ZERO_IV))
+            val plaintext = String(cipher.doFinal(ciphertext), Charsets.US_ASCII)
 
-        // XOR decrypt using repeating key
-        val decrypted = ByteArray(ciphertext.size) { i ->
-            (ciphertext[i].toInt() xor XOR_KEY[i % XOR_KEY.size].toInt()).toByte()
+            val user = Regex("p1:(\\S*)").find(plaintext)?.groupValues?.get(1)
+            val pass = Regex("p2:(\\S*)").find(plaintext)?.groupValues?.get(1)
+            if (!user.isNullOrEmpty() && !pass.isNullOrEmpty()) Pair(user, pass) else null
+        } catch (e: Exception) {
+            null
         }
-
-        // Extract password: take alphanumeric characters until first non-alphanumeric
-        val password = StringBuilder()
-        for (byte in decrypted) {
-            val char = byte.toInt().toChar()
-            when {
-                char in '0'..'9' || char in 'a'..'z' || char in 'A'..'Z' -> password.append(char)
-                else -> break // Stop at first non-alphanumeric
-            }
-        }
-
-        password.toString().takeIf { it.isNotEmpty() }
-    } catch (e: Exception) {
-        null
     }
 }
