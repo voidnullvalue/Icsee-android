@@ -120,28 +120,30 @@ class BlePairingViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private suspend fun tryQueryXkfuCredentials(host: String, adminUsername: String, adminPassword: String): Pair<String, String>? {
-        return try {
-            val client = DvrIpClient(host, 34567)
-            val userMap = client.queryUserMap(adminUsername, adminPassword)
+        // Retry a few times: camera needs time to join WiFi and boot
+        repeat(3) { attempt ->
+            try {
+                val client = DvrIpClient(host, 34567)
+                val userMap = client.queryUserMap(adminUsername, adminPassword)
 
-            // Find any non-admin account (the real provisioned account)
-            val realAccount = userMap?.find {
-                it.name != "admin" && it.name != null && it.name.isNotBlank()
-            }
-
-            if (realAccount != null) {
-                val decryptedPassword = realAccount.passwordV2?.let { XiongmaiCrypto.decryptPasswordV2(it) }
-                if (decryptedPassword != null) {
-                    Pair(realAccount.name, decryptedPassword)
-                } else {
-                    null
+                // Find any non-admin account (the real provisioned account)
+                val realAccount = userMap?.find {
+                    it.name != "admin" && it.name != null && it.name.isNotBlank()
                 }
-            } else {
-                null
+
+                if (realAccount != null) {
+                    val decryptedPassword = realAccount.passwordV2?.let { XiongmaiCrypto.decryptPasswordV2(it) }
+                    if (decryptedPassword != null) {
+                        return Pair(realAccount.name, decryptedPassword)
+                    }
+                }
+            } catch (e: Exception) {
+                if (attempt < 2) {
+                    kotlinx.coroutines.delay(1000) // Wait 1s before retry
+                }
             }
-        } catch (e: Exception) {
-            null
         }
+        return null
     }
 
     fun reset() {
