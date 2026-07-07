@@ -132,7 +132,7 @@ class DvrIpClient(private val host: String, private val port: Int = 34567) {
         if (socket.getInputStream().read(header) != 20) return null
 
         val buffer = ByteBuffer.wrap(header).apply { order(ByteOrder.LITTLE_ENDIAN) }
-        buffer.position(12) // Skip to msgId
+        buffer.position(14) // Skip to msgId (offset 14-15)
         val msgId = buffer.short.toInt() and 0xFFFF
         val payloadLen = buffer.int
 
