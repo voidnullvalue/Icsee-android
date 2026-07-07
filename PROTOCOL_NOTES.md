@@ -550,7 +550,52 @@ notification. The ACK, when present, carries the device's assigned
 username/password, IP, MAC, and token; `parseWifiConfigAck` mirrors the
 vendor's `parseBleWiFiConfigResult` offset walk. Because we rarely observe it,
 provisioning is treated as succeeded once the frame is sent (the camera is
-demonstrably on the network), and the app reports the **factory-default login
-`admin` / no password** — which is what a fresh or reset device uses — then
-relies on normal LAN discovery to find the camera by IP. Reading the real
-assigned credentials from a live ACK remains unconfirmed.
+demonstrably on the network), and the app falls back to the **factory-default
+login `admin` / no password** to reach it over LAN. This no longer means the
+real (non-backdoor) account's credentials are unrecoverable — see the next
+section, which works whether or not the BLE ACK was ever captured.
+
+## Recovering the real provisioned account (`xkfu`) — no ACK required
+
+A separate, independent path recovers the real account's plaintext password
+from the camera itself over DVRIP, entirely after the fact — it does not
+depend on capturing the BLE ACK at all. This was reverse-engineered by
+disassembling `libFunSDK.so` (`Java_com_lib_FunSDK_DecDevRandomUserInfo` →
+`Fun_DecDevRandomUserInfo` → `XAES::Decrypt128_Base64`) and cross-referencing
+the factory app's smali (`SearchDeviceByBleActivity`, method `Lo3/f;->M`),
+then verified live and repeatably against a real camera.
+
+An **earlier attempt in this repo's history** tried to decrypt
+`System.ExUserMap`'s `PasswordV2` field with an XOR key derived by XORing a
+known plaintext against its own ciphertext. That was circular (verified
+against the same pair it was derived from) and did not generalize — it
+produced garbage on any other query. **That approach is wrong and no longer
+used.**
+
+The real mechanism the factory app uses:
+
+1. Query DVRIP `SystemInfo` (msg 1020) → `SerialNo` (16 hex chars, e.g.
+   `a44d13007be81c4d`).
+2. Query DVRIP `GetRandomUser` (msg 1660/1661 — the same message ID pair as
+   `ChangeRandomUser` above, dispatched by JSON `Name` rather than a distinct
+   msgid) → response has a base64 field named `Info` (or `InfoUser` on some
+   firmware), e.g.:
+   ```json
+   {"GetRandomUser":{"Info":"J+8pYoGvW+3uz8VqkDbqECL5HSLMi7D3nMBlzFTDOhk="},
+    "Name":"GetRandomUser","Ret":100}
+   ```
+3. Base64-decode it, then AES-128-CBC decrypt with a **zero IV** and
+   **key = `SerialNo[5:11] + SerialNo[1:7] + SerialNo[8:12]`** (16 ASCII
+   characters, plain substrings of the serial number, Python-slice
+   convention — no hashing or transformation, just concatenation).
+4. The plaintext is a fixed, null-padded string:
+   `"p1:<username> p2:<password> t:<token>"`.
+
+Live-verified against camera serial `a44d13007be81c4d` — decrypts to
+`p1:xkfu p2:5xef5a t:####` (the token changes per query; username/password
+are stable across repeated queries). This only requires LAN access as the
+already-authenticating `admin`/blank backdoor — no prior BLE session, no
+provisioning history, and no captured ACK. See
+`config/XiongmaiCrypto.kt`/`config/DvrIpClient.kt` and the
+`[[project-icsee-random-user-decryption]]` memory. Security implications are
+in `SECURITY.md`.

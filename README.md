@@ -56,7 +56,7 @@ A real, building, testable application. Verified live against the target camera:
 | PTZ pan / tilt | ✅ Verified live | 8-direction movement and stop confirmed via `Ret` codes (and visible motion on-device). |
 | Live video | ✅ Verified live | RTSP (H.265 + PCMA) via `androidx.media3`. DVRIP's own media channel claims OK but delivered no bytes on this camera, so RTSP is the real path. |
 | Push-to-talk | ✅ Verified **audible** | Non-obvious: OPTalk *Claim* (1434) returns `Ret: 100` but leaves the speaker shut — a plaintext OPTalk **`Start`** (1430) opens it, then G.711 A-law frames play out loud. |
-| BLE Wi-Fi provisioning | ✅ Verified on hardware | App scans, connects, sends Wi-Fi credentials over BLE, and the **camera joins the router**. It drops BLE before reporting its own login, so the app shows the factory `admin` / no-password. |
+| BLE Wi-Fi provisioning | ✅ Verified on hardware | App scans, connects, sends Wi-Fi credentials over BLE, and the **camera joins the router**. It drops BLE before reporting its own login, so the app falls back to `admin`/no-password to reach it over LAN, then independently recovers and displays the **real** provisioned account (username + plaintext password) via `GetRandomUser` + AES decryption — see `SECURITY.md`. |
 | Keepalive / reconnect | ✅ Verified live | `1006` keepalive `Ret: 100`; bounded-backoff reconnect. |
 | PTZ presets | ✅ Verified live | `OPPTZControl` Set/Goto/Clear preset — `Ret: 100`. |
 | Device management | ✅ Verified live | SystemInfo, device time, reboot, and generic get/set of ~any named config (msg 1020/1042/1040). |
@@ -69,10 +69,13 @@ Full evidence and the honest caveats live in [`PROTOCOL_STATUS.md`](PROTOCOL_STA
 
 > **Device security note:** this camera exposes an `admin` account with a blank
 > password that always authenticates over DVRIP on the LAN and cannot be
-> secured — configured passwords are ignored for it. This is a firmware defect
-> (classic Xiongmai default account), documented with evidence in
-> [`SECURITY.md`](SECURITY.md). The app therefore does not pretend to "secure"
-> the device.
+> secured — configured passwords are ignored for it. Worse, that backdoor
+> login is also enough to recover the "real" provisioned account's plaintext
+> password on demand (no secret beyond the device's own serial number is
+> involved). This is a firmware defect (classic Xiongmai default account),
+> documented with evidence in [`SECURITY.md`](SECURITY.md). The app therefore
+> does not pretend to "secure" the device — it does, however, surface the real
+> credentials to the user so they at least know what they are.
 
 ## Features
 
@@ -83,7 +86,7 @@ Full evidence and the honest caveats live in [`PROTOCOL_STATUS.md`](PROTOCOL_STA
 - 🎮 **PTZ** — 8-direction press-and-hold pad, stop-on-release, adjustable speed, **presets** (tap-recall / hold-save)
 - 🎥 **Live video** — RTSP (H.265 + PCMA) via `androidx.media3` / `PlayerView`; **full-screen drag-to-steer** PTZ
 - 🎙️ **Push-to-talk** — dedicated talk connection, OPTalk Claim + Start handshake, G.711 A-law upstream
-- 📶 **BLE pairing / Wi-Fi provisioning** — scanner + GATT choreography matched to the factory app; fast connection interval to better capture the provisioning ACK
+- 📶 **BLE pairing / Wi-Fi provisioning** — scanner + GATT choreography matched to the factory app; recovers and displays the real provisioned account (not just the factory backdoor) via `GetRandomUser` + AES decryption, independent of BLE ACK capture
 - 🛠️ **Device management** — device info, time, reboot, **username change**, and a generic get/set editor for any named DVRIP config
 - 📖 **Plain-English config docs** — cryptic protocol keys shown with friendly labels + descriptions + decoded on/off values
 - 🖼️ **Friendly Image settings** — flip / mirror / gain / day-night as real controls instead of raw hex

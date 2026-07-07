@@ -18,6 +18,16 @@ This document tracks which protocol features have been live-confirmed against a 
 - **ModifyPassword** (1040): Shape confirmed in DevPsdManageActivity, response never received live
 - **ChangeRandomUser** (1660/1661): No SessionID, shape from SetDevPsdActivity; never sent to real camera
 
+### LIVE-CONFIRMED on 2026-07-07
+- **GetRandomUser** (1660/1661, same message IDs as ChangeRandomUser — dispatched by JSON
+  `Name` not a distinct msgid): returns `{"GetRandomUser":{"Info":"<base64>"}}` (or `InfoUser`
+  on some firmware). `Info` decrypts with AES-128-CBC, zero IV, key =
+  `SerialNo[5:11]+SerialNo[1:7]+SerialNo[8:12]` to `"p1:<user> p2:<pass> t:<token>"` — this is
+  the real (non-backdoor) provisioned account's plaintext password, recoverable independent of
+  BLE ACK capture. See PROTOCOL_NOTES.md "Recovering the real provisioned account" and
+  `[[project-icsee-random-user-decryption]]`. An earlier XOR-based attempt against
+  `System.ExUserMap`'s `PasswordV2` field was wrong (circular derivation) and has been removed.
+
 ## Tier 1: Device Management (Complete)
 - Device info screen (SystemInfo)
 - Time query (OPTimeQuery)
@@ -32,6 +42,9 @@ This document tracks which protocol features have been live-confirmed against a 
 - BLE pairing credential setting (ChangeRandomUser, msg 1660) — client ready;
   reliant on capturing the provisioning ACK (BLE now requests the fastest
   connection interval to improve capture).
+- Real-account credential retrieval (GetRandomUser, msg 1660) — **live-confirmed**,
+  independent of ACK capture; used both right after BLE pairing and on-demand from the
+  camera settings screen ("Retrieve Credentials").
 
 ## Tier 2: Advanced Settings (Complete via Generic Editor)
 - Image settings (Camera.Param / Camera.ParamEx) — plus a **friendly Image

@@ -53,8 +53,15 @@ that was wrong.)
   yet `admin` keeps authenticating as blank — the stored password is ignored
   for auth. So it cannot be secured.
 - The **real** admin account is **`xkfu`** (Memo "admin 's account"), created at
-  provisioning by the factory app with a random password we don't have
-  (`xkfu`/blank = `Ret:203`).
+  provisioning by the factory app (`xkfu`/blank = `Ret:203`). Its plaintext
+  password **is** recoverable — not random-and-lost as originally thought — via
+  `GetRandomUser` + AES-128-CBC decryption keyed from the device's own serial
+  number; see PROTOCOL_NOTES.md "Recovering the real provisioned account" and
+  `[[project-icsee-random-user-decryption]]`. This doesn't change the
+  conclusion below (the `admin` backdoor makes securing `xkfu` moot either
+  way), but it does mean an app — or anyone with LAN access, since `admin`/blank
+  gets you the login needed to ask — can read the "real" account's password on
+  demand, not just during the original provisioning window.
 
 ## What this means for the app
 

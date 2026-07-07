@@ -37,11 +37,24 @@ behaviour (the device family behind Mirai-era compromises) and is a firmware
 property, not fixable from a client.
 
 The real administrative account is a random-named account (e.g. `xkfu`,
-`Memo: "admin 's account"`) provisioned with a **per-device seed password**.
-That seed is only disclosed in the BLE provisioning ACK to the app that
-provisioned the device; a client that did not provision it (or that missed the
-ACK -- see below) cannot authenticate as the privileged account, and so cannot
-even attempt to disable the backdoor.
+`Memo: "admin 's account"`) provisioned with a per-device password. **That
+password is not actually secret from anyone with LAN access.** It is
+recoverable at any time -- not just during the original BLE provisioning --
+via the DVRIP `GetRandomUser` command: its base64 `Info`/`InfoUser` field
+decrypts with AES-128-CBC (zero IV, key derived entirely from the device's own
+`SystemInfo` serial number) to a plaintext `"p1:<user> p2:<pass> t:<token>"`
+string. See PROTOCOL_NOTES.md "Recovering the real provisioned account" and
+`[[project-icsee-random-user-decryption]]` for the full derivation.
+
+Since reaching `GetRandomUser` only requires the already-open `admin`/blank
+login, **the blank-`admin` backdoor doesn't just grant direct DVRIP control --
+it also hands over the means to recover the "real" account's plaintext
+password on demand**, with no cryptographic material beyond the device's own
+serial number (which the camera also freely discloses to anyone logged in).
+There is no privileged secret here at all: both the bypass and the "real"
+credentials are available to any LAN client, indefinitely. An earlier note
+here assumed the real account's password was single-use/unrecoverable once
+the provisioning ACK was missed; that was wrong.
 
 Consequences for this app:
 
@@ -55,19 +68,24 @@ Consequences for this app:
   `System.ExUserMap` with the `u()` obfuscation) is documented in
   `PASSWORD_CHANGE_RE.md`.
 
-### Provisioning ACK not captured
+### Provisioning ACK not reliably captured (no longer blocks credential display)
 
 This app's BLE pairing does not reliably receive the provisioning ACK carrying
 the camera's assigned random credentials -- the camera typically drops the BLE
-link as it joins Wi-Fi, and we fall back to `admin`/no-password. Surfacing the
-real credentials to the user would require reliably capturing that ACK
-(`ble/BleWifiProvisionCodec` parses it; reception is the open gap).
+link as it joins Wi-Fi, and we fall back to `admin`/no-password to reach it
+over LAN. This used to mean the user never saw their real (non-backdoor)
+login. It no longer does: once the camera is reachable over LAN as
+`admin`/blank, the app independently queries and decrypts the real account via
+`GetRandomUser` (see above) and surfaces it in the BLE pairing success screen
+and via "Retrieve Credentials" in camera settings -- regardless of whether the
+BLE ACK was ever captured.
 
 ## Cryptography
 
-- No custom RSA or AES implementations. `crypto/DvripRsaPublicKey.kt` and
-  `crypto/AesSessionCrypto.kt` use only `java.security`/`javax.crypto`
-  (`KeyFactory`, `Cipher`).
+- No custom RSA or AES implementations. `crypto/DvripRsaPublicKey.kt`,
+  `crypto/AesSessionCrypto.kt`, and `config/XiongmaiCrypto.kt` (the
+  `GetRandomUser` decryption above) all use only `java.security`/`javax.crypto`
+  (`KeyFactory`, `Cipher`) -- never a hand-rolled cipher.
 - The camera's own negotiated cipher (RSA-1024 + AES-128, confirmed live --
   see PROTOCOL_NOTES.md) is weak by modern standards. This app does not
   choose that cipher; it's dictated by the camera's firmware. There is

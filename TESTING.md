@@ -138,10 +138,19 @@ implements) and the reference capture.
 16. BLE Wi-Fi provisioning -- **confirmed on real hardware (OnePlus HD1901,
     2026-07-02): the camera scans, connects, receives the credential frame and
     joins the router.** The camera drops BLE when it joins Wi-Fi, so the
-    assigned-credentials ACK is not observed; the app reports the factory login
-    (`admin` / no password) and the camera is then added by IP via LAN
-    discovery. See PROTOCOL_NOTES.md "BLE Wi-Fi provisioning -- hardware
-    findings" and the BLE rows in PROTOCOL_STATUS.md.
+    assigned-credentials ACK is not observed; the app reaches the camera via
+    LAN discovery using the factory login (`admin` / no password) instead. See
+    PROTOCOL_NOTES.md "BLE Wi-Fi provisioning -- hardware findings" and the
+    BLE rows in PROTOCOL_STATUS.md.
+17. Real-account credential recovery -- **confirmed live and repeatably
+    (2026-07-07) against camera serial `a44d13007be81c4d`**: `GetRandomUser`'s
+    base64 `Info` field decrypts with AES-128-CBC (zero IV, key derived from
+    the serial number) to `p1:xkfu p2:5xef5a t:####`, independent of whether
+    the BLE ACK above was ever captured. See PROTOCOL_NOTES.md "Recovering the
+    real provisioned account" and `[[project-icsee-random-user-decryption]]`.
+    An earlier XOR-based attempt against `System.ExUserMap`'s `PasswordV2`
+    field was disproven (circular derivation, didn't generalize) and has been
+    removed from the app.
 
 ### RTSP video probe (2026-07-01)
 
