@@ -10,7 +10,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -194,7 +197,71 @@ fun CameraSettingsScreen(
                 )
             }
 
-            Row(Modifier.fillMaxWidth()) {
+            Divider(modifier = Modifier.padding(vertical = 16.dp))
+
+            // Retrieve real provisioned credentials
+            Text("Retrieve Real Credentials", style = androidx.compose.material3.MaterialTheme.typography.labelMedium)
+            Text(
+                "After provisioning, the factory admin account (admin/no-password) works temporarily. " +
+                    "Use this to retrieve the real account credentials.",
+                modifier = Modifier.padding(bottom = 8.dp, top = 4.dp),
+                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                Button(
+                    onClick = viewModel::retrieveRealCredentials,
+                    enabled = !state.retrievingCreds && state.host.isNotBlank() && state.username.isNotBlank()
+                ) {
+                    if (state.retrievingCreds) CircularProgressIndicator(Modifier.padding(end = 8.dp))
+                    Text(if (state.retrievingCreds) "Retrieving..." else "Retrieve Credentials")
+                }
+            }
+
+            state.retrievedUsername?.let { username ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    colors = androidx.compose.material3.CardDefaults.cardColors(
+                        containerColor = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer
+                    ),
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("Real Account Credentials Found:", style = androidx.compose.material3.MaterialTheme.typography.labelSmall)
+                        Text(
+                            "Username: $username",
+                            modifier = Modifier.padding(top = 8.dp),
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        )
+                        state.retrievedPassword?.let { password ->
+                            Text(
+                                "Password: $password",
+                                modifier = Modifier.padding(top = 6.dp),
+                                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            )
+                        }
+                        Button(
+                            onClick = { viewModel.update { it.copy(username = username, password = state.retrievedPassword ?: "") } },
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) {
+                            Text("Use These Credentials")
+                        }
+                    }
+                }
+            }
+
+            state.retrieveCredsError?.let {
+                Text(
+                    "✗ $it",
+                    modifier = Modifier.padding(top = 8.dp),
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.error
+                )
+            }
+
+            Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
                 Button(onClick = { viewModel.save(onDone) }, modifier = Modifier.padding(end = 8.dp)) { Text("Save") }
                 if (state.isExisting) {
                     Button(onClick = { viewModel.delete(onDone) }) { Text("Delete") }

@@ -1,9 +1,12 @@
 package com.voidnullvalue.icseelocal.ui.settings
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.voidnullvalue.icseelocal.ble.BlePairedCamera
+import com.voidnullvalue.icseelocal.config.DvrIpClient
+import com.voidnullvalue.icseelocal.config.XiongmaiCrypto
 import com.voidnullvalue.icseelocal.discovery.DiscoveryBeacon
 import com.voidnullvalue.icseelocal.dvrip.DvripTransport
 import com.voidnullvalue.icseelocal.model.CameraDescriptor
@@ -36,6 +39,11 @@ data class CameraSettingsUiState(
     val isExisting: Boolean = false,
     val testResult: String? = null,
     val testing: Boolean = false,
+    // Retrieved real account credentials (xkfu or other)
+    val retrievedUsername: String? = null,
+    val retrievedPassword: String? = null,
+    val retrievingCreds: Boolean = false,
+    val retrieveCredsError: String? = null,
     // Carried through from a discovery beacon (if this camera came from a LAN
     // scan) so "Add" doesn't throw away identifying metadata the discovery
     // client already found.
@@ -220,6 +228,57 @@ class CameraSettingsViewModel(application: Application) : AndroidViewModel(appli
                 }
             }
             _state.value = _state.value.copy(testing = false, testResult = result)
+        }
+    }
+
+    fun retrieveRealCredentials() {
+        val s = _state.value
+        if (s.host.isBlank() || s.username.isBlank()) {
+            _state.value = _state.value.copy(
+                retrieveCredsError = "Host and admin username required. Use admin account and no-password to query."
+            )
+            return
+        }
+
+        _state.value = _state.value.copy(retrievingCreds = true, retrieveCredsError = null, retrievedUsername = null, retrievedPassword = null)
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    Log.d("CameraSettingsViewModel", "Retrieving real credentials from ${s.host}")
+                    val client = DvrIpClient(s.host, s.dvripPort.toIntOrNull() ?: 34567)
+                    val userMap = client.queryUserMap(s.username, s.password)
+
+                    // Find any non-admin account
+                    val realAccount = userMap?.find {
+                        it.name != "admin" && it.name != null && it.name.isNotBlank()
+                    }
+
+                    if (realAccount != null) {
+                        val decryptedPassword = realAccount.passwordV2?.let { XiongmaiCrypto.decryptPasswordV2(it) }
+                        if (decryptedPassword != null) {
+                            Log.d("CameraSettingsViewModel", "Successfully retrieved ${realAccount.name} credentials")
+                            Pair(realAccount.name, decryptedPassword)
+                        } else {
+                            throw Exception("Failed to decrypt password for ${realAccount.name}")
+                        }
+                    } else {
+                        throw Exception("No real account found (only admin)")
+                    }
+                }.onSuccess { (username, password) ->
+                    _state.value = _state.value.copy(
+                        retrievingCreds = false,
+                        retrievedUsername = username,
+                        retrievedPassword = password,
+                        retrieveCredsError = null
+                    )
+                }.onFailure { e ->
+                    Log.e("CameraSettingsViewModel", "Failed to retrieve: ${e.message}", e)
+                    _state.value = _state.value.copy(
+                        retrievingCreds = false,
+                        retrieveCredsError = e.message ?: "Unknown error"
+                    )
+                }
+            }
         }
     }
 }
