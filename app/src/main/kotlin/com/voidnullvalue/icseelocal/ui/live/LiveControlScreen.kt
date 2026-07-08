@@ -2,9 +2,6 @@ package com.voidnullvalue.icseelocal.ui.live
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.webkit.WebChromeClient
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -89,6 +86,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.YouTubePlayer
+import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.AbstractYouTubePlayerListener
+import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.options.IFramePlayerOptions
+import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTubePlayerView
 import com.voidnullvalue.icseelocal.model.ConnectionState
 import com.voidnullvalue.icseelocal.ptz.PtzCommand
 import com.voidnullvalue.icseelocal.video.RtspPlayerState
@@ -312,76 +313,55 @@ fun LiveControlScreen(
 }
 
 /**
- * Easter egg overlay: shows YouTube's own official embedded player (same as
- * embedding a video on any website -- nothing downloaded, stored, or
- * redistributed) muted, purely for the on-screen visual, while the camera
- * speaker separately plays a local track via [onStart]
- * (LiveControlViewModel.startDance/FileAudioSource) -- muted so the phone
- * doesn't also play the video's own audio out loud alongside it. An earlier
- * version tried to relay the WebView's own audio via MediaProjection playback
- * capture instead of a local file; that didn't crash but produced no sound,
- * consistent with Android's playback-capture API refusing to capture
- * DRM-protected content (which embedded YouTube audio typically is).
+ * Easter egg overlay: plays a YouTube clip on-screen (muted) purely as the
+ * visual, while [onStart] (LiveControlViewModel.startDance) simultaneously
+ * streams the local dance track out the camera's own speaker and choreographs
+ * the PTZ head to the beat. The video is muted on the phone so only the camera
+ * speaker is heard.
+ *
+ * Uses YouTube's official IFrame Player API through the android-youtube-player
+ * wrapper rather than a hand-rolled WebView `<iframe>`. Two earlier raw-WebView
+ * attempts (a direct load of the /embed/ URL, then a hand-built iframe host
+ * page) both rendered a blank white box: the player only initialises when it's
+ * driven through the IFrame API's script + ready/postMessage handshake with a
+ * real origin, which this library sets up correctly. The library manages its
+ * own internal WebView, hardware layer, and lifecycle.
+ *
+ * Note the camera speaker deliberately plays a *local* track, not the video's
+ * own audio: Android's playback-capture API refuses to capture DRM-protected
+ * content (embedded YouTube audio), so the two are decoupled -- see
+ * FileAudioSource. The clip's audio and the speaker track are the same song, so
+ * they read as one thing.
  */
 @Composable
 private fun FunkytownDanceDialog(onDismiss: () -> Unit, onStart: () -> Unit) {
     LaunchedEffect(Unit) { onStart() }
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             AndroidView(
                 factory = { ctx ->
-                    WebView(ctx).also { webView ->
-                        webView.settings.javaScriptEnabled = true
-                        // The YouTube iframe player relies on DOM storage (localStorage/
-                        // sessionStorage) for its own state -- without this it commonly
-                        // fails silently and renders a blank white page instead of erroring.
-                        webView.settings.domStorageEnabled = true
-                        webView.settings.mediaPlaybackRequiresUserGesture = false
-                        webView.settings.loadWithOverviewMode = true
-                        webView.settings.useWideViewPort = true
-                        // Without an explicit client, some WebView/Chromium versions won't
-                        // fully load the embed's own sub-resources.
-                        webView.webViewClient = WebViewClient()
-                        webView.webChromeClient = WebChromeClient()
-                        val cookieManager = android.webkit.CookieManager.getInstance()
-                        cookieManager.setAcceptCookie(true)
-                        cookieManager.setAcceptThirdPartyCookies(webView, true)
-                        // Load the player *inside our own <iframe>* on a host page rather than
-                        // navigating the WebView straight to the /embed/ URL. The old direct
-                        // load rendered blank because (1) the YouTube player expects a real
-                        // embedding origin/referer, and (2) playback uses EME (encrypted-media),
-                        // which the browser only permits when the framing page delegates it via
-                        // the iframe allow= attribute -- there is no such attribute on a
-                        // top-level navigation, so the chrome loads but the video surface stays
-                        // white. The https base URL below supplies the origin/referer.
-                        // mute=1: purely visual here -- audio comes from the local track via
-                        // onStart/FileAudioSource instead, so the phone doesn't also play the
-                        // video's own audio out loud alongside the camera speaker.
-                        val html = """
-                            <!DOCTYPE html>
-                            <html>
-                              <head>
-                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                                <style>
-                                  html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}
-                                  iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}
-                                </style>
-                              </head>
-                              <body>
-                                <iframe
-                                  src="https://www.youtube.com/embed/Z6dqIYKIBSU?autoplay=1&playsinline=1&mute=1"
-                                  allow="autoplay; encrypted-media; picture-in-picture"
-                                  allowfullscreen></iframe>
-                              </body>
-                            </html>
-                        """.trimIndent()
-                        webView.loadDataWithBaseURL(
-                            "https://www.youtube.com",
-                            html,
-                            "text/html",
-                            "utf-8",
-                            null,
+                    YouTubePlayerView(ctx).also { playerView ->
+                        // Let the library drive its own WebView lifecycle (create/pause/
+                        // release) off the host's lifecycle so it cleans up with the dialog.
+                        playerView.enableAutomaticInitialization = false
+                        lifecycleOwner.lifecycle.addObserver(playerView)
+                        // controls=0: chrome-free full-bleed visual. The video autoplays
+                        // via the ready callback below; mute() keeps the phone silent so only
+                        // the camera speaker is heard.
+                        val options = IFramePlayerOptions.Builder()
+                            .controls(0)
+                            .rel(0)
+                            .build()
+                        playerView.initialize(
+                            object : AbstractYouTubePlayerListener() {
+                                override fun onReady(youTubePlayer: YouTubePlayer) {
+                                    youTubePlayer.mute()
+                                    youTubePlayer.loadVideo("Z6dqIYKIBSU", 0f)
+                                }
+                            },
+                            options,
                         )
                     }
                 },
