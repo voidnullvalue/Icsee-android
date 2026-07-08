@@ -347,10 +347,42 @@ private fun FunkytownDanceDialog(onDismiss: () -> Unit, onStart: () -> Unit) {
                         val cookieManager = android.webkit.CookieManager.getInstance()
                         cookieManager.setAcceptCookie(true)
                         cookieManager.setAcceptThirdPartyCookies(webView, true)
+                        // Load the player *inside our own <iframe>* on a host page rather than
+                        // navigating the WebView straight to the /embed/ URL. The old direct
+                        // load rendered blank because (1) the YouTube player expects a real
+                        // embedding origin/referer, and (2) playback uses EME (encrypted-media),
+                        // which the browser only permits when the framing page delegates it via
+                        // the iframe allow= attribute -- there is no such attribute on a
+                        // top-level navigation, so the chrome loads but the video surface stays
+                        // white. The https base URL below supplies the origin/referer.
                         // mute=1: purely visual here -- audio comes from the local track via
                         // onStart/FileAudioSource instead, so the phone doesn't also play the
                         // video's own audio out loud alongside the camera speaker.
-                        webView.loadUrl("https://www.youtube.com/embed/Z6dqIYKIBSU?autoplay=1&playsinline=1&mute=1")
+                        val html = """
+                            <!DOCTYPE html>
+                            <html>
+                              <head>
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                <style>
+                                  html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}
+                                  iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}
+                                </style>
+                              </head>
+                              <body>
+                                <iframe
+                                  src="https://www.youtube.com/embed/Z6dqIYKIBSU?autoplay=1&playsinline=1&mute=1"
+                                  allow="autoplay; encrypted-media; picture-in-picture"
+                                  allowfullscreen></iframe>
+                              </body>
+                            </html>
+                        """.trimIndent()
+                        webView.loadDataWithBaseURL(
+                            "https://www.youtube.com",
+                            html,
+                            "text/html",
+                            "utf-8",
+                            null,
+                        )
                     }
                 },
                 modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
