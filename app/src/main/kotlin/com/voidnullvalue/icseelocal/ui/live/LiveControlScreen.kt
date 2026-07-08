@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -330,14 +331,26 @@ private fun FunkytownDanceDialog(onDismiss: () -> Unit, onStart: () -> Unit) {
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             AndroidView(
                 factory = { ctx ->
-                    WebView(ctx).apply {
-                        settings.javaScriptEnabled = true
-                        settings.mediaPlaybackRequiresUserGesture = false
-                        webChromeClient = WebChromeClient()
+                    WebView(ctx).also { webView ->
+                        webView.settings.javaScriptEnabled = true
+                        // The YouTube iframe player relies on DOM storage (localStorage/
+                        // sessionStorage) for its own state -- without this it commonly
+                        // fails silently and renders a blank white page instead of erroring.
+                        webView.settings.domStorageEnabled = true
+                        webView.settings.mediaPlaybackRequiresUserGesture = false
+                        webView.settings.loadWithOverviewMode = true
+                        webView.settings.useWideViewPort = true
+                        // Without an explicit client, some WebView/Chromium versions won't
+                        // fully load the embed's own sub-resources.
+                        webView.webViewClient = WebViewClient()
+                        webView.webChromeClient = WebChromeClient()
+                        val cookieManager = android.webkit.CookieManager.getInstance()
+                        cookieManager.setAcceptCookie(true)
+                        cookieManager.setAcceptThirdPartyCookies(webView, true)
                         // mute=1: purely visual here -- audio comes from the local track via
                         // onStart/FileAudioSource instead, so the phone doesn't also play the
                         // video's own audio out loud alongside the camera speaker.
-                        loadUrl("https://www.youtube.com/embed/Z6dqIYKIBSU?autoplay=1&playsinline=1&mute=1")
+                        webView.loadUrl("https://www.youtube.com/embed/Z6dqIYKIBSU?autoplay=1&playsinline=1&mute=1")
                     }
                 },
                 modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
