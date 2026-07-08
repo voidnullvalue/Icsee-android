@@ -66,9 +66,23 @@ This document tracks which protocol features have been live-confirmed against a 
 - PTZ presets (`OPPTZControl` Set/Goto/Clear, msg 1400) — **live-confirmed** `Ret:100`.
 - SD card format (`OPStorageManager`, msg 1460, `Action:Clear/Type:Data`) —
   built from decompiled spec, confirm-gated; **not yet run live** (destructive).
-- Recorded-clip browser (`OPFileQuery`, msg 1440) — built from decompiled spec;
-  response parsing **not yet confirmed** against a live reply. Recorded-video
-  *playback* is blocked by the same DVRIP media-byte gap as live view (below).
+- Recorded-clip browser (`OPFileQuery`, msg 1440) — **live-confirmed 2026-07-09**.
+  Request MUST include `"Event":"*"` or the camera returns `Ret:119` with no
+  list. Response is an `OPFileQuery` array of BeginTime/EndTime/FileName/
+  FileLength (FileLength is ~KB blocks, not bytes).
+- Recorded-video **playback/download — SOLVED, live-confirmed 2026-07-09.** The
+  media-byte "gap" was a wrong codec guess, not a real blocker: recorded clips
+  are **HEVC/H.265**, not H.264 (the old analysis searched for H.264 start codes
+  and found none). Sequence (per OpenIPC/python-dvr): `OPPlayBack` **Claim on msg
+  1424**, then **DownloadStart on msg 1420**; file bytes stream on **msg 1426**
+  until a zero-length frame terminates; `DownloadStop` on 1420. The downloaded
+  `.h264` file is HEVC wrapped in XM private NALs (`00 00 01` + marker
+  `F9/FA/FC/FD` = reserved HEVC types 124–126 that decoders ignore); the real
+  NALs are VPS(32)/SPS(33)/PPS(34)/IDR(19)/TRAIL(0,1). Strip the wrapper NALs →
+  clean HEVC that decodes directly (confirmed: pulled a clip, decoded to MP4,
+  correct scene + OSD timestamp). Sensor is 2304×2592 (stacked dual-view).
+  In-app: `video/RecordedClipExporter` downloads + remuxes to MP4 (MediaMuxer)
+  for ExoPlayer. Repro tooling: `tools/live/sdcard_probe.py`, `sdcard_download.py`.
 
 ## Key Design Patterns
 - **Race-safe request/response**: Subscribe to DvripTransport.incomingFrames BEFORE sending (matches DvripLoginNegotiator)

@@ -21,7 +21,11 @@ import com.voidnullvalue.icseelocal.session.CameraCredentials
 import com.voidnullvalue.icseelocal.session.CameraSessionManager
 import com.voidnullvalue.icseelocal.session.DvripCommandChannel
 import com.voidnullvalue.icseelocal.storage.CameraStore
+import com.voidnullvalue.icseelocal.video.RecordedClipExporter
+import java.io.File
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -117,6 +121,9 @@ data class DeviceManagementUiState(
     val formatRequested: Boolean = false,
     val recordings: List<RecordedFile>? = null,
     val recordingsQuerying: Boolean = false,
+    val downloadingClip: String? = null,
+    val downloadProgressBytes: Long = 0,
+    val playbackFile: String? = null,
     val accounts: List<DeviceAccount>? = null,
     val accountsQuerying: Boolean = false,
 )
@@ -565,16 +572,12 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
     }
 
     /**
-     * Lists recorded clips for [date] via `OPFileQuery` (msg 1440). Request shape
-     * is the standard XM DVRIP form (BeginTime/EndTime/Channel/DriverTypeMask/
-     * Type/StreamType); the response is an `OPFileQuery` array of
-     * BeginTime/EndTime/FileName/FileLength. Built from decompiled spec; parsing
-     * is tolerant and needs live confirmation. In-app playback of a clip is not
-     * wired -- the DVRIP media-byte stream is the same one still unresolved for
-     * live view (see PROTOCOL_STATUS.md), so this browser lists what's recorded
-     * rather than streaming it.
+     * Loads EVERY recorded clip on the SD card as one flat list (no day picker).
+     * The camera rejects a wide multi-year `OPFileQuery` range (Ret:119), so we
+     * read the recorded span from `StorageInfo` and query each day in it, then
+     * merge. Live-confirmed 2026-07-09.
      */
-    fun queryRecordings(date: String) {
+    fun loadAllRecordings() {
         val manager = sessionManager ?: return
         val transport = manager.controlTransport ?: return
         val channel = manager.commandChannel ?: return
@@ -583,23 +586,99 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
         viewModelScope.launch {
             _state.value = _state.value.copy(recordingsQuerying = true, recordings = null, errorMessage = null)
             runCatching {
-                val json = buildJsonObject {
-                    put("Name", "OPFileQuery")
-                    put("OPFileQuery", buildJsonObject {
-                        put("BeginTime", "$date 00:00:00")
-                        put("EndTime", "$date 23:59:59")
-                        put("Channel", ch)
-                        put("DriverTypeMask", "0x0000FFFF")
-                        put("Type", "h264")
-                        put("StreamType", "0x00000000")
-                    })
-                    put("SessionID", "0x%08x".format(sid.toLong()))
-                }.toString()
-                val text = sendAndAwait(transport, channel, DvripMessageIds.FILE_QUERY, DvripMessageIds.FILE_QUERY + 1, json, timeoutMillis = 15000)
-                val files = text?.let { parseRecordings(it) } ?: emptyList()
-                _state.value = _state.value.copy(recordings = files)
+                val storageJson = "{\"Name\":\"StorageInfo\",\"StorageInfo\":{},\"SessionID\":\"0x%08x\"}".format(sid.toLong())
+                val storageText = sendAndAwait(transport, channel, DvripMessageIds.INFO_GET, DvripMessageIds.INFO_GET_RESPONSE, storageJson)
+                val days = recordedDays(storageText)
+                val all = ArrayList<RecordedFile>()
+                var lastDiag: String? = null
+                for (day in days) {
+                    val (files, diag) = queryDay(transport, channel, sid, ch, day)
+                    all += files
+                    if (diag != null) lastDiag = diag
+                }
+                all.sortByDescending { it.beginTime }
+                val diag = when {
+                    all.isNotEmpty() -> null
+                    lastDiag != null -> lastDiag
+                    days.isEmpty() -> "SD card reports no recorded time span."
+                    else -> "No recordings on the SD card."
+                }
+                _state.value = _state.value.copy(recordings = all, errorMessage = diag)
             }.onFailure { _state.value = _state.value.copy(errorMessage = it.message ?: "Query failed", recordings = emptyList()) }
             _state.value = _state.value.copy(recordingsQuerying = false)
+        }
+    }
+
+    /** Runs one day's OPFileQuery (msg 1440); returns (clips, diagnostic-or-null). */
+    private suspend fun queryDay(
+        transport: DvripTransport,
+        channel: DvripCommandChannel,
+        sid: UInt,
+        ch: Int,
+        date: String,
+    ): Pair<List<RecordedFile>, String?> {
+        val json = buildJsonObject {
+            put("Name", "OPFileQuery")
+            put("OPFileQuery", buildJsonObject {
+                put("BeginTime", "$date 00:00:00")
+                put("EndTime", "$date 23:59:59")
+                put("Channel", ch)
+                put("DriverTypeMask", "0x0000FFFF")
+                // Event="*" is REQUIRED -- omitting it returns Ret:119 (live-confirmed).
+                put("Event", "*")
+                put("Type", "h264")
+                put("StreamType", "0x00000000")
+            })
+            put("SessionID", "0x%08x".format(sid.toLong()))
+        }.toString()
+        val text = sendAndAwait(transport, channel, DvripMessageIds.FILE_QUERY, DvripMessageIds.FILE_QUERY + 1, json, timeoutMillis = 15000)
+        val files = text?.let { parseRecordings(it) } ?: emptyList()
+        val ret = text?.let { Regex("\"Ret\"\\s*:\\s*(\\d+)").find(it)?.groupValues?.get(1) }
+        val diag = when {
+            text == null -> "No response from camera (timeout)."
+            files.isEmpty() && ret != null && ret != "100" -> "Camera rejected the query (Ret=$ret)."
+            else -> null
+        }
+        return files to diag
+    }
+
+    /** Extracts the list of days ("yyyy-MM-dd") spanned by the recorded data in a StorageInfo reply. */
+    private fun recordedDays(storageText: String?): List<String> {
+        if (storageText == null) return emptyList()
+        val dates = Regex("\"(?:Old|New)(?:Start|End)Time\"\\s*:\\s*\"(\\d{4}-\\d{2}-\\d{2}) ")
+            .findAll(storageText)
+            .map { it.groupValues[1] }
+            .filter { it != "0000-00-00" }
+            .toSortedSet()
+        if (dates.isEmpty()) return emptyList()
+        return try {
+            val start = java.time.LocalDate.parse(dates.first())
+            val end = java.time.LocalDate.parse(dates.last())
+            generateSequence(start) { if (it < end) it.plusDays(1) else null }
+                .map { it.toString() }
+                .toList()
+        } catch (e: Exception) {
+            dates.toList()
+        }
+    }
+
+    /** Sets the camera clock to the phone's current local time (`OPTimeSetting`, msg 1450). */
+    fun setCameraClock() {
+        val manager = sessionManager ?: return
+        val transport = manager.controlTransport ?: return
+        val channel = manager.commandChannel ?: return
+        val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(busy = true, errorMessage = null, statusMessage = null)
+            runCatching {
+                val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+                val json = "{\"Name\":\"OPTimeSetting\",\"OPTimeSetting\":\"$now\",\"SessionID\":\"0x%08x\"}".format(sid.toLong())
+                val text = sendAndAwait(transport, channel, DvripMessageIds.MACHINE_CONTROL, DvripMessageIds.MACHINE_CONTROL + 1, json)
+                val ret = text?.let { Regex("\"Ret\"\\s*:\\s*(\\d+)").find(it)?.groupValues?.get(1) }
+                if (ret == "100") _state.value = _state.value.copy(statusMessage = "Camera clock set to $now", deviceTime = now)
+                else _state.value = _state.value.copy(errorMessage = "Set clock failed (Ret=$ret)")
+            }.onFailure { _state.value = _state.value.copy(errorMessage = it.message ?: "Set clock failed") }
+            _state.value = _state.value.copy(busy = false)
         }
     }
 
@@ -616,6 +695,46 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                 sizeText = s("FileLength"),
             )
         }
+    }
+
+    /**
+     * Downloads [clip] off the SD card (DVRIP OPPlayBack), remuxes the XM-framed
+     * HEVC to a standard MP4 in the app cache, and exposes its path via
+     * [DeviceManagementUiState.playbackFile] for the browser to play in ExoPlayer.
+     * See [RecordedClipExporter]; protocol live-confirmed 2026-07-09.
+     */
+    fun downloadAndPlay(clip: RecordedFile) {
+        val manager = sessionManager ?: return
+        val transport = manager.controlTransport ?: return
+        val channel = manager.commandChannel ?: return
+        val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
+        if (clip.fileName.isBlank()) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                downloadingClip = clip.fileName, downloadProgressBytes = 0,
+                errorMessage = null, playbackFile = null,
+            )
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val exporter = RecordedClipExporter(transport, channel, sid)
+                    val out = File(getApplication<Application>().cacheDir, "recording_${System.currentTimeMillis()}.mp4")
+                    exporter.exportToMp4(clip.fileName, clip.beginTime, clip.endTime, out) { bytes ->
+                        _state.value = _state.value.copy(downloadProgressBytes = bytes)
+                    }
+                    out.absolutePath
+                }
+            }.onSuccess { path ->
+                _state.value = _state.value.copy(playbackFile = path)
+            }.onFailure {
+                _state.value = _state.value.copy(errorMessage = it.message ?: "Download failed")
+            }
+            _state.value = _state.value.copy(downloadingClip = null)
+        }
+    }
+
+    fun clearPlayback() {
+        _state.value.playbackFile?.let { runCatching { File(it).delete() } }
+        _state.value = _state.value.copy(playbackFile = null)
     }
 
     /**
