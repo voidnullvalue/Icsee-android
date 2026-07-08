@@ -39,14 +39,26 @@ class DanceChoreography(private val ptz: PtzController) {
     val isActive: Boolean get() = job?.isActive == true
 
     companion object {
-        private const val STEP = 6
+        // Max PTZ speed (PtzRequestBuilder allows 0..10) for big, snappy moves.
+        private const val STEP = 10
 
-        /** One move per beat: right, left, up, down, then a quick left-right shimmy, repeats. */
+        /**
+         * One move per beat. Exaggerated pattern: wide side-to-side sweeps (two
+         * beats each way), a big nod, then diagonal criss-crosses and a fast
+         * shimmy before a rest -- so the head throws itself around instead of
+         * making small nudges.
+         */
         val DEFAULT_MOVES: List<PtzCommand?> = listOf(
             PtzCommand.DIRECTION_RIGHT,
+            PtzCommand.DIRECTION_RIGHT,
+            PtzCommand.DIRECTION_LEFT,
             PtzCommand.DIRECTION_LEFT,
             PtzCommand.DIRECTION_UP,
             PtzCommand.DIRECTION_DOWN,
+            PtzCommand.DIRECTION_LEFT_UP,
+            PtzCommand.DIRECTION_RIGHT_DOWN,
+            PtzCommand.DIRECTION_RIGHT_UP,
+            PtzCommand.DIRECTION_LEFT_DOWN,
             PtzCommand.DIRECTION_RIGHT,
             PtzCommand.DIRECTION_LEFT,
             null,

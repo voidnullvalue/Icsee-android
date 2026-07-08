@@ -24,8 +24,8 @@ android {
         applicationId = "com.voidnullvalue.icseelocal"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "0.15.4"
+        versionCode = 21
+        versionName = "0.15.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
