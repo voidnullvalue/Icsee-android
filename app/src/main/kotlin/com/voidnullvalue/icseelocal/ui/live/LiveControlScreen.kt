@@ -1,7 +1,13 @@
 package com.voidnullvalue.icseelocal.ui.live
 
 import android.Manifest
+import android.app.Activity
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.Build
+import android.webkit.WebChromeClient
+import android.webkit.WebView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -118,6 +124,7 @@ fun LiveControlScreen(
     val talkError by viewModel.talkError.collectAsState()
     val talkFrames by viewModel.talkFrames.collectAsState()
     val rtspState by viewModel.rtspState.collectAsState()
+    val danceModeTriggered by viewModel.danceModeTriggered.collectAsState()
 
     val context = LocalContext.current
     var hasMicPermission by remember {
@@ -290,6 +297,86 @@ fun LiveControlScreen(
                 ) {
                     Icon(Icons.Default.Close, contentDescription = "Exit full screen", tint = Color.White)
                 }
+            }
+        }
+    }
+
+    // Easter egg: Konami code on the PTZ pad (Up Up Down Down Left Right Left
+    // Right) unlocks this. See KonamiCodeDetector/DanceChoreography.
+    if (danceModeTriggered) {
+        FunkytownDanceDialog(
+            onDismiss = {
+                viewModel.stopDance()
+                viewModel.dismissDanceTrigger()
+            },
+            onProjectionGranted = viewModel::startDance,
+        )
+    }
+}
+
+/**
+ * Easter egg overlay: plays YouTube's own official embedded player (same as
+ * embedding a video on any website -- nothing downloaded, stored, or
+ * redistributed), then relays whatever audio is actually playing to the
+ * camera speaker via Android's MediaProjection playback-capture API -- the
+ * same consent-gated mechanism screen recording/casting uses, not a novel
+ * capture path. [onProjectionGranted] fires once the user approves that
+ * system dialog; the caller (LiveControlViewModel.startDance) does the actual
+ * relay + PTZ dance.
+ */
+@Composable
+private fun FunkytownDanceDialog(onDismiss: () -> Unit, onProjectionGranted: (MediaProjection) -> Unit) {
+    val context = LocalContext.current
+    val projectionManager = remember {
+        context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+    }
+
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        val projection = if (result.resultCode == Activity.RESULT_OK && data != null) {
+            projectionManager.getMediaProjection(result.resultCode, data)
+        } else {
+            null
+        }
+        if (projection != null) onProjectionGranted(projection) else onDismiss()
+    }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            launcher.launch(projectionManager.createScreenCaptureIntent())
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                Text(
+                    "Dance mode needs Android 10 or newer (playback capture).",
+                    color = Color.White,
+                    modifier = Modifier.padding(24.dp),
+                )
+            } else {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            settings.javaScriptEnabled = true
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            webChromeClient = WebChromeClient()
+                            loadUrl("https://www.youtube.com/embed/Z6dqIYKIBSU?autoplay=1&playsinline=1")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                )
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x99000000)),
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Stop dance", tint = Color.White)
             }
         }
     }

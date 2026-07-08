@@ -1,6 +1,9 @@
 package com.voidnullvalue.icseelocal.ui.live
 
 import android.app.Application
+import android.media.projection.MediaProjection
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -9,9 +12,12 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
 import com.voidnullvalue.icseelocal.app.IcseeApplication
 import com.voidnullvalue.icseelocal.audio.MicrophoneSource
+import com.voidnullvalue.icseelocal.audio.PlaybackCaptureAudioSource
 import com.voidnullvalue.icseelocal.audio.TalkController
 import com.voidnullvalue.icseelocal.model.CameraDescriptor
 import com.voidnullvalue.icseelocal.model.ConnectionState
+import com.voidnullvalue.icseelocal.ptz.DanceChoreography
+import com.voidnullvalue.icseelocal.ptz.KonamiCodeDetector
 import com.voidnullvalue.icseelocal.ptz.PtzCommand
 import com.voidnullvalue.icseelocal.ptz.PtzController
 import com.voidnullvalue.icseelocal.session.CameraCredentials
@@ -41,6 +47,14 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     private var videoController: VideoStreamController? = null
     private var talkController: TalkController? = null
     private var videoStatsJob: Job? = null
+
+    // Easter egg: Konami code on the PTZ pad unlocks "dance mode" -- see
+    // KonamiCodeDetector, DanceChoreography, PlaybackCaptureAudioSource.
+    private val konamiDetector = KonamiCodeDetector()
+    private var danceChoreography: DanceChoreography? = null
+    private var danceAudioController: TalkController? = null
+    private val _danceModeTriggered = MutableStateFlow(false)
+    val danceModeTriggered: StateFlow<Boolean> = _danceModeTriggered.asStateFlow()
     // The coroutine observing the shared manager's state (wires video/talk on
     // Authenticated). Held so it can be cancelled when we release the session.
     private var sessionStateJob: Job? = null
@@ -204,6 +218,7 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         sessionStateJob?.cancel()
         sessionStateJob = null
         stopTalk()
+        stopDance()
         videoStatsJob?.cancel()
         videoController?.stop()
         videoController = null
@@ -250,7 +265,12 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     // --- PTZ ---
-    fun onPtzDown(command: PtzCommand) = ptzController?.onPointerDown(command, _speedStep.value)
+    fun onPtzDown(command: PtzCommand) {
+        ptzController?.onPointerDown(command, _speedStep.value)
+        if (konamiDetector.onInput(command)) {
+            _danceModeTriggered.value = true
+        }
+    }
     fun onPtzUp() = ptzController?.onPointerUp()
     fun onPtzCancel() = ptzController?.onPointerCancel()
     fun onPtzDirectionChange(command: PtzCommand) = ptzController?.onDirectionChange(command, _speedStep.value)
@@ -259,6 +279,42 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     fun clearPreset(preset: Int) = ptzController?.clearPreset(preset)
     fun startTour() = ptzController?.startTour()
     fun stopTour() = ptzController?.stopTour()
+
+    // --- Dance mode (Konami code easter egg) ---
+    fun dismissDanceTrigger() {
+        _danceModeTriggered.value = false
+    }
+
+    /**
+     * Starts relaying this app's own audio playback (the embedded video WebView --
+     * see LiveControlScreen) to the camera speaker via the talk channel, and starts
+     * the PTZ dance loop. [mediaProjection] comes from the system consent dialog the
+     * UI must request before calling this -- see PlaybackCaptureAudioSource.
+     */
+    @RequiresApi(Build.VERSION_CODES.Q)
+    fun startDance(mediaProjection: MediaProjection) {
+        val found = _camera.value ?: return
+        val state = _connectionState.value as? ConnectionState.Authenticated ?: return
+        val channel = sessionManager?.commandChannel ?: return
+        val seq = sessionManager?.sessionSequence ?: return
+        val ptz = ptzController ?: return
+
+        stopDance()
+        val source = PlaybackCaptureAudioSource(mediaProjection)
+        val controller = TalkController(found.host, found.dvripPort, state.sessionId, source, seq, channel)
+        danceAudioController = controller
+        viewModelScope.launch {
+            runCatching { controller.start(viewModelScope, onError = { stopDance() }) }
+        }
+        danceChoreography = DanceChoreography(ptz).also { it.start(viewModelScope, source.beats) }
+    }
+
+    fun stopDance() {
+        danceChoreography?.stop()
+        danceChoreography = null
+        danceAudioController?.stop()
+        danceAudioController = null
+    }
 
     // --- Push to talk ---
     fun startTalk() {

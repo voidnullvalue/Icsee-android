@@ -30,12 +30,12 @@ import java.io.IOException
  * initialize or yields silence unless the AudioManager is in communication
  * mode, which is exactly the "talk button does nothing" failure this app hit.
  */
-class MicrophoneSource(private val context: Context) {
+class MicrophoneSource(private val context: Context) : AudioChunkSource {
     fun hasPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     @android.annotation.SuppressLint("MissingPermission")
-    fun captureAlawChunks(): Flow<ByteArray> = flow {
+    override fun captureAlawChunks(): Flow<ByteArray> = flow {
         // Checked immediately before use (not just via the separate hasPermission()
         // helper) so Android Lint's dataflow analysis for AudioRecord recognizes the
         // guard; the @SuppressLint above covers the residual TOCTOU gap between this

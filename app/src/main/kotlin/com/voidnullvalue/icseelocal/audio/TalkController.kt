@@ -29,7 +29,7 @@ class TalkController(
     private val host: String,
     private val port: Int,
     private val sessionId: UInt,
-    private val microphone: MicrophoneSource,
+    private val audioSource: AudioChunkSource,
     /**
      * The session's shared sequence counter (see [CameraSessionManager.sessionSequence]).
      * The OPTalk claim must continue the session's sequence, not restart at 0,
@@ -97,7 +97,7 @@ class TalkController(
             controlChannel.sendJson(DvripMessageIds.OPTALK_CONTROL_REQUEST, startJson)
             Log.d(TAG, "sent OPTalk Start on control connection")
 
-            captureJob = microphone.captureAlawChunks()
+            captureJob = audioSource.captureAlawChunks()
                 // Audio data frames carry a constant sequence of 0 in the capture,
                 // not the monotonic counter the claim uses.
                 .onEach { alaw ->
