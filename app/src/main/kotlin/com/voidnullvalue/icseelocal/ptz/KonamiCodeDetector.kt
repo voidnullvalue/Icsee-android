@@ -11,6 +11,14 @@ package com.voidnullvalue.icseelocal.ptz
  * entry (more than [timeoutMillis] between two consecutive correct steps) also
  * resets, so idle panning around while filming doesn't eventually trip it by
  * accident over a long session.
+ *
+ * [SEQUENCE] is in wire-command terms, NOT visual button-press terms: this
+ * camera's Left/Right pan is mirrored relative to the `DirectionLeft`/
+ * `DirectionRight` wire names (see `PtzPad`/`dragToPtz` in LiveControlScreen.kt,
+ * same swap), so pressing the buttons visually labeled "Left, Right, Left,
+ * Right" actually emits `DIRECTION_RIGHT, DIRECTION_LEFT, DIRECTION_RIGHT,
+ * DIRECTION_LEFT` -- [SEQUENCE] matches that, or the code wouldn't recognize
+ * itself being entered as displayed on screen. Up/Down are not swapped.
  */
 class KonamiCodeDetector(
     private val timeoutMillis: Long = 2000,
@@ -49,8 +57,9 @@ class KonamiCodeDetector(
         val SEQUENCE = listOf(
             PtzCommand.DIRECTION_UP, PtzCommand.DIRECTION_UP,
             PtzCommand.DIRECTION_DOWN, PtzCommand.DIRECTION_DOWN,
-            PtzCommand.DIRECTION_LEFT, PtzCommand.DIRECTION_RIGHT,
-            PtzCommand.DIRECTION_LEFT, PtzCommand.DIRECTION_RIGHT,
+            // Swapped relative to the visual Left/Right labels -- see class doc.
+            PtzCommand.DIRECTION_RIGHT, PtzCommand.DIRECTION_LEFT,
+            PtzCommand.DIRECTION_RIGHT, PtzCommand.DIRECTION_LEFT,
         )
     }
 }

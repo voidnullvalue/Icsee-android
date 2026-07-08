@@ -53,6 +53,8 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     private val konamiDetector = KonamiCodeDetector()
     private var danceChoreography: DanceChoreography? = null
     private var danceAudioController: TalkController? = null
+    private var danceProjection: MediaProjection? = null
+    private var danceProjectionCallback: MediaProjection.Callback? = null
     private val _danceModeTriggered = MutableStateFlow(false)
     val danceModeTriggered: StateFlow<Boolean> = _danceModeTriggered.asStateFlow()
     // The coroutine observing the shared manager's state (wires video/talk on
@@ -290,6 +292,12 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
      * see LiveControlScreen) to the camera speaker via the talk channel, and starts
      * the PTZ dance loop. [mediaProjection] comes from the system consent dialog the
      * UI must request before calling this -- see PlaybackCaptureAudioSource.
+     *
+     * MUST register a [MediaProjection.Callback] before the projection is used to
+     * build an `AudioPlaybackCaptureConfiguration` -- without it the system throws
+     * (crashed on first try). The callback also lets us tear down cleanly if the
+     * user stops the projection from the system's own recording notification
+     * instead of this app's stop button.
      */
     @RequiresApi(Build.VERSION_CODES.Q)
     fun startDance(mediaProjection: MediaProjection) {
@@ -300,6 +308,16 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         val ptz = ptzController ?: return
 
         stopDance()
+
+        val callback = object : MediaProjection.Callback() {
+            override fun onStop() {
+                stopDance()
+            }
+        }
+        mediaProjection.registerCallback(callback, null)
+        danceProjection = mediaProjection
+        danceProjectionCallback = callback
+
         val source = PlaybackCaptureAudioSource(mediaProjection)
         val controller = TalkController(found.host, found.dvripPort, state.sessionId, source, seq, channel)
         danceAudioController = controller
@@ -314,6 +332,10 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         danceChoreography = null
         danceAudioController?.stop()
         danceAudioController = null
+        danceProjectionCallback?.let { danceProjection?.unregisterCallback(it) }
+        danceProjectionCallback = null
+        danceProjection?.stop()
+        danceProjection = null
     }
 
     // --- Push to talk ---

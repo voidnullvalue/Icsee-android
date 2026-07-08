@@ -6,12 +6,12 @@ import org.junit.Test
 
 class KonamiCodeDetectorTest {
 
-    private val sequence = listOf(
-        PtzCommand.DIRECTION_UP, PtzCommand.DIRECTION_UP,
-        PtzCommand.DIRECTION_DOWN, PtzCommand.DIRECTION_DOWN,
-        PtzCommand.DIRECTION_LEFT, PtzCommand.DIRECTION_RIGHT,
-        PtzCommand.DIRECTION_LEFT, PtzCommand.DIRECTION_RIGHT,
-    )
+    // Reference the real constant rather than a hand-copied list -- an earlier
+    // version duplicated it here and the two silently drifted apart (the real
+    // one needed a Left/Right swap to match this camera's mirrored pan wire
+    // commands; this copy didn't get updated), which made the tests pass while
+    // the actual sequence was wrong end to end.
+    private val sequence = KonamiCodeDetector.SEQUENCE
 
     @Test
     fun `fires exactly on the last correct input of the sequence, not before`() {
