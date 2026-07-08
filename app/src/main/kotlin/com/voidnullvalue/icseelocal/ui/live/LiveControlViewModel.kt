@@ -1,9 +1,6 @@
 package com.voidnullvalue.icseelocal.ui.live
 
 import android.app.Application
-import android.media.projection.MediaProjection
-import android.os.Build
-import androidx.annotation.RequiresApi
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -11,8 +8,8 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
 import com.voidnullvalue.icseelocal.app.IcseeApplication
+import com.voidnullvalue.icseelocal.audio.FileAudioSource
 import com.voidnullvalue.icseelocal.audio.MicrophoneSource
-import com.voidnullvalue.icseelocal.audio.PlaybackCaptureAudioSource
 import com.voidnullvalue.icseelocal.audio.TalkController
 import com.voidnullvalue.icseelocal.model.CameraDescriptor
 import com.voidnullvalue.icseelocal.model.ConnectionState
@@ -49,12 +46,10 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     private var videoStatsJob: Job? = null
 
     // Easter egg: Konami code on the PTZ pad unlocks "dance mode" -- see
-    // KonamiCodeDetector, DanceChoreography, PlaybackCaptureAudioSource.
+    // KonamiCodeDetector, DanceChoreography, FileAudioSource.
     private val konamiDetector = KonamiCodeDetector()
     private var danceChoreography: DanceChoreography? = null
     private var danceAudioController: TalkController? = null
-    private var danceProjection: MediaProjection? = null
-    private var danceProjectionCallback: MediaProjection.Callback? = null
     private val _danceModeTriggered = MutableStateFlow(false)
     val danceModeTriggered: StateFlow<Boolean> = _danceModeTriggered.asStateFlow()
     // The coroutine observing the shared manager's state (wires video/talk on
@@ -288,19 +283,18 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
-     * Starts relaying this app's own audio playback (the embedded video WebView --
-     * see LiveControlScreen) to the camera speaker via the talk channel, and starts
-     * the PTZ dance loop. [mediaProjection] comes from the system consent dialog the
-     * UI must request before calling this -- see PlaybackCaptureAudioSource.
+     * Starts relaying a local track (see [FileAudioSource] -- you supply the file
+     * yourself, nothing is bundled or downloaded) to the camera speaker via the
+     * talk channel, and starts the PTZ dance loop synced to its detected beats.
      *
-     * MUST register a [MediaProjection.Callback] before the projection is used to
-     * build an `AudioPlaybackCaptureConfiguration` -- without it the system throws
-     * (crashed on first try). The callback also lets us tear down cleanly if the
-     * user stops the projection from the system's own recording notification
-     * instead of this app's stop button.
+     * An earlier version of this captured a WebView's own audio playback via
+     * Android's MediaProjection-based `AudioPlaybackCaptureConfiguration`
+     * ("casting"): it didn't crash, but produced no audio, consistent with that
+     * API deliberately refusing to capture DRM-protected content (which embedded
+     * YouTube audio typically is). This sidesteps the whole capture layer by
+     * decoding a local file directly instead.
      */
-    @RequiresApi(Build.VERSION_CODES.Q)
-    fun startDance(mediaProjection: MediaProjection) {
+    fun startDance() {
         val found = _camera.value ?: return
         val state = _connectionState.value as? ConnectionState.Authenticated ?: return
         val channel = sessionManager?.commandChannel ?: return
@@ -309,16 +303,7 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
 
         stopDance()
 
-        val callback = object : MediaProjection.Callback() {
-            override fun onStop() {
-                stopDance()
-            }
-        }
-        mediaProjection.registerCallback(callback, null)
-        danceProjection = mediaProjection
-        danceProjectionCallback = callback
-
-        val source = PlaybackCaptureAudioSource(mediaProjection)
+        val source = FileAudioSource(getApplication())
         val controller = TalkController(found.host, found.dvripPort, state.sessionId, source, seq, channel)
         danceAudioController = controller
         viewModelScope.launch {
@@ -332,10 +317,6 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         danceChoreography = null
         danceAudioController?.stop()
         danceAudioController = null
-        danceProjectionCallback?.let { danceProjection?.unregisterCallback(it) }
-        danceProjectionCallback = null
-        danceProjection?.stop()
-        danceProjection = null
     }
 
     // --- Push to talk ---

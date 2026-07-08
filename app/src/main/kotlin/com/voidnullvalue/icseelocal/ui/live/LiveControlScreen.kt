@@ -1,11 +1,7 @@
 package com.voidnullvalue.icseelocal.ui.live
 
 import android.Manifest
-import android.app.Activity
 import android.content.pm.PackageManager
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
-import android.os.Build
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -309,65 +305,43 @@ fun LiveControlScreen(
                 viewModel.stopDance()
                 viewModel.dismissDanceTrigger()
             },
-            onProjectionGranted = viewModel::startDance,
+            onStart = viewModel::startDance,
         )
     }
 }
 
 /**
- * Easter egg overlay: plays YouTube's own official embedded player (same as
+ * Easter egg overlay: shows YouTube's own official embedded player (same as
  * embedding a video on any website -- nothing downloaded, stored, or
- * redistributed), then relays whatever audio is actually playing to the
- * camera speaker via Android's MediaProjection playback-capture API -- the
- * same consent-gated mechanism screen recording/casting uses, not a novel
- * capture path. [onProjectionGranted] fires once the user approves that
- * system dialog; the caller (LiveControlViewModel.startDance) does the actual
- * relay + PTZ dance.
+ * redistributed) muted, purely for the on-screen visual, while the camera
+ * speaker separately plays a local track via [onStart]
+ * (LiveControlViewModel.startDance/FileAudioSource) -- muted so the phone
+ * doesn't also play the video's own audio out loud alongside it. An earlier
+ * version tried to relay the WebView's own audio via MediaProjection playback
+ * capture instead of a local file; that didn't crash but produced no sound,
+ * consistent with Android's playback-capture API refusing to capture
+ * DRM-protected content (which embedded YouTube audio typically is).
  */
 @Composable
-private fun FunkytownDanceDialog(onDismiss: () -> Unit, onProjectionGranted: (MediaProjection) -> Unit) {
-    val context = LocalContext.current
-    val projectionManager = remember {
-        context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-    }
-
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val data = result.data
-        val projection = if (result.resultCode == Activity.RESULT_OK && data != null) {
-            projectionManager.getMediaProjection(result.resultCode, data)
-        } else {
-            null
-        }
-        if (projection != null) onProjectionGranted(projection) else onDismiss()
-    }
-
-    LaunchedEffect(Unit) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            launcher.launch(projectionManager.createScreenCaptureIntent())
-        }
-    }
+private fun FunkytownDanceDialog(onDismiss: () -> Unit, onStart: () -> Unit) {
+    LaunchedEffect(Unit) { onStart() }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                Text(
-                    "Dance mode needs Android 10 or newer (playback capture).",
-                    color = Color.White,
-                    modifier = Modifier.padding(24.dp),
-                )
-            } else {
-                AndroidView(
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            settings.javaScriptEnabled = true
-                            settings.mediaPlaybackRequiresUserGesture = false
-                            webChromeClient = WebChromeClient()
-                            loadUrl("https://www.youtube.com/embed/Z6dqIYKIBSU?autoplay=1&playsinline=1")
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
-                )
-            }
+            AndroidView(
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        settings.javaScriptEnabled = true
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        webChromeClient = WebChromeClient()
+                        // mute=1: purely visual here -- audio comes from the local track via
+                        // onStart/FileAudioSource instead, so the phone doesn't also play the
+                        // video's own audio out loud alongside the camera speaker.
+                        loadUrl("https://www.youtube.com/embed/Z6dqIYKIBSU?autoplay=1&playsinline=1&mute=1")
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+            )
             IconButton(
                 onClick = onDismiss,
                 modifier = Modifier
