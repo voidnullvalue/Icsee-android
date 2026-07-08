@@ -1,9 +1,9 @@
 package com.voidnullvalue.icseelocal.ui.devicemanagement
 
-import androidx.compose.foundation.background
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,36 +20,24 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.common.MediaItem
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 
 /**
  * Recorded-clip browser: shows every clip on the SD card as a flat grid of
  * tiles (no day picker -- [DeviceManagementViewModel.loadAllRecordings] reads
  * the recorded span from StorageInfo and merges every day). Tapping a tile
  * downloads the clip via DVRIP OPPlayBack, remuxes the camera's private-framed
- * HEVC to MP4 (see [com.voidnullvalue.icseelocal.video.RecordedClipExporter]),
- * and plays it in ExoPlayer. Also offers a one-tap camera-clock sync.
+ * HEVC to MP4, and saves it to the device's Movies collection; an "Open" action
+ * hands it to the system video player. Also offers one-tap camera-clock sync.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,6 +46,7 @@ fun PlaybackBrowserScreen(
     viewModel: DeviceManagementViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
 
     LaunchedEffect(Unit) {
         viewModel.refreshTime()
@@ -80,6 +69,21 @@ fun PlaybackBrowserScreen(
             state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp)) }
             state.errorMessage?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp)) }
 
+            // After a successful save, offer to open it in the system player.
+            val savedUri = state.savedVideoUri
+            if (savedUri != null && savedUri.startsWith("content:")) {
+                Button(
+                    onClick = {
+                        val view = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(Uri.parse(savedUri), "video/mp4")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(view, "Open video"))
+                    },
+                    modifier = Modifier.padding(top = 6.dp),
+                ) { Text("Open saved video") }
+            }
+
             if (state.recordingsQuerying) CircularProgressIndicator(Modifier.padding(top = 12.dp))
 
             val recordings = state.recordings
@@ -100,7 +104,7 @@ fun PlaybackBrowserScreen(
                                 downloading = state.downloadingClip == f.fileName,
                                 progressBytes = if (state.downloadingClip == f.fileName) state.downloadProgressBytes else 0,
                                 anyDownloading = state.downloadingClip != null,
-                                onPlay = { viewModel.downloadAndPlay(f) },
+                                onDownload = { viewModel.downloadClip(f) },
                             )
                         }
                     }
@@ -110,10 +114,6 @@ fun PlaybackBrowserScreen(
             Button(onClick = onBack, modifier = Modifier.padding(top = 12.dp)) { Text("Back") }
         }
     }
-
-    state.playbackFile?.let { path ->
-        ClipPlaybackDialog(path = path, onDismiss = { viewModel.clearPlayback() })
-    }
 }
 
 @Composable
@@ -122,52 +122,25 @@ private fun ClipTile(
     downloading: Boolean,
     progressBytes: Long,
     anyDownloading: Boolean,
-    onPlay: () -> Unit,
+    onDownload: () -> Unit,
 ) {
     Card(
         Modifier
             .fillMaxWidth()
-            .clickable(enabled = !anyDownloading && f.fileName.isNotBlank(), onClick = onPlay),
+            .clickable(enabled = !anyDownloading && f.fileName.isNotBlank(), onClick = onDownload),
     ) {
         Column(Modifier.padding(10.dp)) {
             Text(dateOnly(f.beginTime), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-            Text("${timeOnly(f.beginTime)}", style = MaterialTheme.typography.titleMedium)
+            Text(timeOnly(f.beginTime), style = MaterialTheme.typography.titleMedium)
             Text("→ ${timeOnly(f.endTime)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            val tag = clipTag(f.fileName)
-            if (tag != null) {
-                Text(tag, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            clipTag(f.fileName)?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (downloading) {
                 CircularProgressIndicator(Modifier.padding(top = 6.dp))
                 Text("${"%.1f".format(progressBytes / 1_000_000.0)} MB", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 2.dp))
             } else {
-                Text("Tap to play", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
-            }
-        }
-    }
-}
-
-@UnstableApi
-@Composable
-private fun ClipPlaybackDialog(path: String, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri("file://$path"))
-            playWhenReady = true
-            prepare()
-        }
-    }
-    DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
-
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-            AndroidView(
-                factory = { ctx -> PlayerView(ctx).apply { player = exoPlayer } },
-                modifier = Modifier.fillMaxSize(),
-            )
-            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-                Text("Close", color = Color.White)
+                Text("Tap to download", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
             }
         }
     }

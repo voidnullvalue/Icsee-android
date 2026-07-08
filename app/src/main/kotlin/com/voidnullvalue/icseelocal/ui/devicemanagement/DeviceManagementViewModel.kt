@@ -22,6 +22,8 @@ import com.voidnullvalue.icseelocal.session.CameraSessionManager
 import com.voidnullvalue.icseelocal.session.DvripCommandChannel
 import com.voidnullvalue.icseelocal.storage.CameraStore
 import com.voidnullvalue.icseelocal.video.RecordedClipExporter
+import com.voidnullvalue.icseelocal.video.RecordedVideoStore
+import com.voidnullvalue.icseelocal.video.SavedVideo
 import java.io.File
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -123,7 +125,8 @@ data class DeviceManagementUiState(
     val recordingsQuerying: Boolean = false,
     val downloadingClip: String? = null,
     val downloadProgressBytes: Long = 0,
-    val playbackFile: String? = null,
+    val savedVideoUri: String? = null,
+    val savedVideoLabel: String? = null,
     val accounts: List<DeviceAccount>? = null,
     val accountsQuerying: Boolean = false,
 )
@@ -699,11 +702,14 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
 
     /**
      * Downloads [clip] off the SD card (DVRIP OPPlayBack), remuxes the XM-framed
-     * HEVC to a standard MP4 in the app cache, and exposes its path via
-     * [DeviceManagementUiState.playbackFile] for the browser to play in ExoPlayer.
-     * See [RecordedClipExporter]; protocol live-confirmed 2026-07-09.
+     * HEVC to a standard MP4, and saves it into the device's Movies collection so
+     * it's a normal downloaded video the user can open/share in any player. The
+     * saved URI is exposed via [DeviceManagementUiState.savedVideoUri]. Saving to
+     * a real player (rather than decoding the 6 MP HEVC in-app) keeps the UI
+     * responsive. See [RecordedClipExporter]/[RecordedVideoStore]; protocol
+     * live-confirmed 2026-07-09.
      */
-    fun downloadAndPlay(clip: RecordedFile) {
+    fun downloadClip(clip: RecordedFile) {
         val manager = sessionManager ?: return
         val transport = manager.controlTransport ?: return
         val channel = manager.commandChannel ?: return
@@ -712,19 +718,29 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
         viewModelScope.launch {
             _state.value = _state.value.copy(
                 downloadingClip = clip.fileName, downloadProgressBytes = 0,
-                errorMessage = null, playbackFile = null,
+                errorMessage = null, statusMessage = null, savedVideoUri = null, savedVideoLabel = null,
             )
             runCatching {
                 withContext(Dispatchers.IO) {
+                    val app = getApplication<Application>()
                     val exporter = RecordedClipExporter(transport, channel, sid)
-                    val out = File(getApplication<Application>().cacheDir, "recording_${System.currentTimeMillis()}.mp4")
-                    exporter.exportToMp4(clip.fileName, clip.beginTime, clip.endTime, out) { bytes ->
+                    val temp = File(app.cacheDir, "recording_${System.currentTimeMillis()}.mp4")
+                    exporter.exportToMp4(clip.fileName, clip.beginTime, clip.endTime, temp) { bytes ->
                         _state.value = _state.value.copy(downloadProgressBytes = bytes)
                     }
-                    out.absolutePath
+                    val name = "icsee_${clip.beginTime.replace(Regex("[^0-9]"), "")}.mp4"
+                    val saved = RecordedVideoStore.save(app, temp, name)
+                    runCatching { temp.delete() }
+                    saved
                 }
-            }.onSuccess { path ->
-                _state.value = _state.value.copy(playbackFile = path)
+            }.onSuccess { saved ->
+                when (saved) {
+                    is SavedVideo.Success -> _state.value = _state.value.copy(
+                        savedVideoUri = saved.uri, savedVideoLabel = saved.label,
+                        statusMessage = "Saved to ${saved.label}",
+                    )
+                    is SavedVideo.Failure -> _state.value = _state.value.copy(errorMessage = saved.reason)
+                }
             }.onFailure {
                 _state.value = _state.value.copy(errorMessage = it.message ?: "Download failed")
             }
@@ -732,9 +748,8 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
-    fun clearPlayback() {
-        _state.value.playbackFile?.let { runCatching { File(it).delete() } }
-        _state.value = _state.value.copy(playbackFile = null)
+    fun clearSavedVideo() {
+        _state.value = _state.value.copy(savedVideoUri = null, savedVideoLabel = null, statusMessage = null)
     }
 
     /**

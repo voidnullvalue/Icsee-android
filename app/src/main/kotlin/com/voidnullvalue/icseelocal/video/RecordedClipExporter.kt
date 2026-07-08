@@ -71,6 +71,7 @@ class RecordedClipExporter(
             // Subscribe BEFORE sending so no data frame is missed (same
             // race-avoidance pattern the rest of the app uses).
             val job = async(start = CoroutineStart.UNDISPATCHED) {
+                var lastReport = 0L
                 transport.incomingFrames
                     .filter { it.header.messageId == PB_DATA }
                     .takeWhile { it.header.payloadLength > 0 }
@@ -78,8 +79,16 @@ class RecordedClipExporter(
                     .filter { it.payload.isEmpty() || it.payload[0] != '{'.code.toByte() }
                     .collect {
                         collected.write(it.payload)
-                        onProgress(collected.size().toLong())
+                        // Throttle progress: a fast LAN download is ~1000 frames in a
+                        // few seconds, and updating observable UI state per frame floods
+                        // recomposition and can ANR the app. Report at most ~4x/sec.
+                        val now = System.currentTimeMillis()
+                        if (now - lastReport >= 250) {
+                            onProgress(collected.size().toLong())
+                            lastReport = now
+                        }
                     }
+                onProgress(collected.size().toLong())
                 collected.toByteArray()
             }
             commandChannel.sendJson(PB_CLAIM, body("Claim", fileName, begin, end))
