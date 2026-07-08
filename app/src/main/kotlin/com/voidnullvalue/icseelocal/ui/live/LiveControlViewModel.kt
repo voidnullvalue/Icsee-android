@@ -303,7 +303,10 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
 
         stopDance()
 
-        val source = FileAudioSource(getApplication())
+        // Same DRM-free archive.org MP4 the on-screen video streams (see
+        // DANCE_MEDIA_URL): FileAudioSource decodes its audio track for the
+        // camera speaker, and its beats drive the PTZ choreography.
+        val source = FileAudioSource(getApplication(), sourceUrl = DANCE_MEDIA_URL)
         val controller = TalkController(found.host, found.dvripPort, state.sessionId, source, seq, channel)
         danceAudioController = controller
         viewModelScope.launch {
@@ -393,5 +396,17 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         releaseSession()
         rtspPlayer.release()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(this)
+    }
+
+    companion object {
+        /**
+         * Dance easter-egg media: the Funkytown video on the Internet Archive, a
+         * plain DRM-free MP4 (H.264 + AAC). The on-screen ExoPlayer streams it
+         * for the visual; [FileAudioSource] decodes its audio for the camera
+         * speaker + PTZ beats. Not a YouTube embed (blocked, error 152) and not a
+         * stream-rip -- a direct read of a publicly-hosted file.
+         */
+        const val DANCE_MEDIA_URL =
+            "https://archive.org/download/Lipps_Inc_Funky_Town/Lipps_Inc_Funky_Town.mp4"
     }
 }

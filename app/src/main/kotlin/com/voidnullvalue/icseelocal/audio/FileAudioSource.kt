@@ -33,14 +33,21 @@ import kotlinx.coroutines.isActive
  * whatever's already playing through the OS audio mixer, so there's no
  * capture-layer DRM restriction to hit.
  *
- * Deliberately reads from local device storage rather than bundling any audio as
- * an app asset: this repo is public, and shipping a copyrighted commercial
- * recording in a publicly-distributed APK/repo is a real problem, not a
- * hypothetical one. Whatever file you want to use here is yours to supply --
- * `adb push your-track.mp3 <trackFile() path>` (or copy it with a file manager)
- * before triggering playback.
+ * Two ways to supply the track:
+ *  - [sourceUrl] non-null: streamed/decoded straight from that URL (nothing is
+ *    persisted). Used for the dance easter egg, which points at a DRM-free
+ *    archive.org MP4 -- [MediaExtractor] follows the URL and decodes its audio
+ *    track in place. This is NOT stream-ripping a protected service; it's a
+ *    direct read of a publicly-hosted file, so there's no ToS/DRM issue.
+ *  - [sourceUrl] null: reads a local file the caller supplies at [trackFile]
+ *    (`adb push your-track.mp3 <path>` or a file manager). Kept because bundling
+ *    a copyrighted recording in this public repo/APK would be a real problem.
  */
-class FileAudioSource(context: Context, fileName: String = "funkytown.mp3") : AudioChunkSource {
+class FileAudioSource(
+    context: Context,
+    fileName: String = "funkytown.mp3",
+    private val sourceUrl: String? = null,
+) : AudioChunkSource {
     private val musicDir = File(context.getExternalFilesDir(null), "Music")
     private val file = File(musicDir, fileName)
     private val beatDetector = BeatDetector()
@@ -50,7 +57,7 @@ class FileAudioSource(context: Context, fileName: String = "funkytown.mp3") : Au
     val beats: SharedFlow<Unit> = _beats.asSharedFlow()
 
     fun trackFile(): File = file
-    fun isAvailable(): Boolean = file.exists() && file.length() > 0
+    fun isAvailable(): Boolean = sourceUrl != null || (file.exists() && file.length() > 0)
 
     override fun captureAlawChunks(): Flow<ByteArray> = flow {
         if (!isAvailable()) {
@@ -59,7 +66,7 @@ class FileAudioSource(context: Context, fileName: String = "funkytown.mp3") : Au
                     "(e.g. `adb push yourtrack.mp3 ${file.path}`) before starting.",
             )
         }
-        val mono8k = decodeToMono8kHzPcm(file)
+        val mono8k = decodeToMono8kHzPcm()
         var offset = 0
         while (offset < mono8k.size && kotlin.coroutines.coroutineContext.isActive) {
             val end = minOf(offset + TalkAudioFrame.AUDIO_PAYLOAD_SIZE, mono8k.size)
@@ -77,9 +84,11 @@ class FileAudioSource(context: Context, fileName: String = "funkytown.mp3") : Au
     /** Decodes the whole file up front (simplest correct implementation for a short clip -- a full
      *  track decoded to 16-bit PCM is a few tens of MB, trivial for a modern phone) rather than
      *  streaming/resampling incrementally across codec output boundaries. */
-    private fun decodeToMono8kHzPcm(file: File): ShortArray {
+    private fun decodeToMono8kHzPcm(): ShortArray {
         val extractor = MediaExtractor()
-        extractor.setDataSource(file.path)
+        // MediaExtractor.setDataSource(String) accepts an http(s) URL as well as a
+        // local path; for the URL case it streams and follows redirects itself.
+        extractor.setDataSource(sourceUrl ?: file.path)
         var trackIndex = -1
         var format: MediaFormat? = null
         for (i in 0 until extractor.trackCount) {

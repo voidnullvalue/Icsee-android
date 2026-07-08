@@ -83,13 +83,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.YouTubePlayer
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.AbstractYouTubePlayerListener
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.options.IFramePlayerOptions
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTubePlayerView
 import com.voidnullvalue.icseelocal.model.ConnectionState
 import com.voidnullvalue.icseelocal.ptz.PtzCommand
 import com.voidnullvalue.icseelocal.video.RtspPlayerState
@@ -313,59 +312,45 @@ fun LiveControlScreen(
 }
 
 /**
- * Easter egg overlay: plays a YouTube clip on-screen (muted) purely as the
- * visual, while [onStart] (LiveControlViewModel.startDance) simultaneously
- * streams the local dance track out the camera's own speaker and choreographs
- * the PTZ head to the beat. The video is muted on the phone so only the camera
- * speaker is heard.
+ * Easter egg overlay: streams the Funkytown video (a DRM-free MP4 on the
+ * Internet Archive, [LiveControlViewModel.DANCE_MEDIA_URL]) on the phone screen
+ * via ExoPlayer -- muted, because [onStart] (LiveControlViewModel.startDance)
+ * decodes that same MP4's audio out the camera's own speaker and choreographs
+ * the PTZ head to its beat.
  *
- * Uses YouTube's official IFrame Player API through the android-youtube-player
- * wrapper rather than a hand-rolled WebView `<iframe>`. Two earlier raw-WebView
- * attempts (a direct load of the /embed/ URL, then a hand-built iframe host
- * page) both rendered a blank white box: the player only initialises when it's
- * driven through the IFrame API's script + ready/postMessage handshake with a
- * real origin, which this library sets up correctly. The library manages its
- * own internal WebView, hardware layer, and lifecycle.
- *
- * Note the camera speaker deliberately plays a *local* track, not the video's
- * own audio: Android's playback-capture API refuses to capture DRM-protected
- * content (embedded YouTube audio), so the two are decoupled -- see
- * FileAudioSource. The clip's audio and the speaker track are the same song, so
- * they read as one thing.
+ * Deliberately NOT a YouTube embed. As of late 2025 YouTube blocks its
+ * embedded-player context in a bare in-app WebView (error "152-4"/"Video
+ * unavailable" for every video, regardless of embed setting or origin --
+ * confirmed against the most-embeddable clips and in the android-youtube-player
+ * and yt-dlp issue trackers). A direct MP4 in ExoPlayer -- the same player the
+ * app already uses for RTSP -- has no embed, DRM, or origin dependency.
  */
+@UnstableApi
 @Composable
 private fun FunkytownDanceDialog(onDismiss: () -> Unit, onStart: () -> Unit) {
     LaunchedEffect(Unit) { onStart() }
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(LiveControlViewModel.DANCE_MEDIA_URL))
+            volume = 0f // camera speaker carries the audio, not the phone
+            repeatMode = Player.REPEAT_MODE_ALL
+            playWhenReady = true
+            prepare()
+        }
+    }
+    DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             AndroidView(
                 factory = { ctx ->
-                    YouTubePlayerView(ctx).also { playerView ->
-                        // Let the library drive its own WebView lifecycle (create/pause/
-                        // release) off the host's lifecycle so it cleans up with the dialog.
-                        playerView.enableAutomaticInitialization = false
-                        lifecycleOwner.lifecycle.addObserver(playerView)
-                        // controls=0: chrome-free full-bleed visual. The video autoplays
-                        // via the ready callback below; mute() keeps the phone silent so only
-                        // the camera speaker is heard.
-                        val options = IFramePlayerOptions.Builder()
-                            .controls(0)
-                            .rel(0)
-                            .build()
-                        playerView.initialize(
-                            object : AbstractYouTubePlayerListener() {
-                                override fun onReady(youTubePlayer: YouTubePlayer) {
-                                    youTubePlayer.mute()
-                                    youTubePlayer.loadVideo("Z6dqIYKIBSU", 0f)
-                                }
-                            },
-                            options,
-                        )
+                    PlayerView(ctx).apply {
+                        player = exoPlayer
+                        useController = false
                     }
                 },
-                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                modifier = Modifier.fillMaxWidth().aspectRatio(4f / 3f), // archive.org clip is 640x480
             )
             IconButton(
                 onClick = onDismiss,

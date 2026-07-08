@@ -24,8 +24,8 @@ android {
         applicationId = "com.voidnullvalue.icseelocal"
         minSdk = 26
         targetSdk = 36
-        versionCode = 21
-        versionName = "0.15.5"
+        versionCode = 22
+        versionName = "0.15.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -101,13 +101,6 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.10.0")
     implementation("androidx.media3:media3-exoplayer-rtsp:1.10.0")
     implementation("androidx.media3:media3-ui:1.10.0")
-
-    // Easter-egg dance visual: plays a YouTube clip on-screen (muted) while the
-    // camera speaker plays the local dance track and PTZ dances to the beat.
-    // Uses YouTube's official IFrame Player API (via this well-maintained
-    // wrapper) rather than a hand-rolled WebView <iframe>, which rendered blank
-    // -- the player must be driven through the IFrame API handshake to work.
-    implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:12.1.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
