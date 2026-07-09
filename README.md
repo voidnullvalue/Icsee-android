@@ -62,7 +62,9 @@ A real, building, testable application. Verified live against the target camera:
 | Device management | ✅ Verified live | SystemInfo, device time, reboot, and generic get/set of ~any named config (msg 1020/1042/1040). |
 | Username change | ✅ Verified live | `ModifyUser` (msg 1484) renames the account; re-login under the new name confirmed. |
 | Password change | ✅ Verified live | Uses `ChangeRandomUser` (msg 1660, session-less) — verified 2026-07-07 against the real `xkfu` account on an already-provisioned camera: old password rejected afterward, new password authenticates. Two other candidate mechanisms (`ModifyPassword` alone; `ModifyPassword` + `System.ExUserMap`) were tried first and confirmed NOT to work despite ACKing `Ret:100` — see [`PASSWORD_CHANGE_RE.md`](PASSWORD_CHANGE_RE.md). Doesn't touch the unremovable blank-`admin` backdoor — see [`SECURITY.md`](SECURITY.md). |
-| SD format / recordings list | 🟡 Built from spec | `OPStorageManager` format and `OPFileQuery` clip listing built from the decompiled vendor shapes; not yet confirmed against a live reply. Recorded-video *playback* is blocked by the same DVRIP media-byte gap as live view. |
+| SD storage & recordings | ✅ Verified live | Storage status, format (confirm-gated), and clip listing (`OPFileQuery` — needs `"Event":"*"` or it returns `Ret:119`). |
+| Recorded-video download & playback | ✅ Verified live | Clips are XM-private-framed **HEVC** (not H.264 — that was the old "media-byte gap"); pulled via `OPPlayBack` (Claim 1424 → DownloadStart 1420, data on 1426), wrapper NALs stripped, remuxed to MP4, saved to the gallery and opened in the system player. |
+| Recording schedule & clock | ✅ Verified live | Visual weekly schedule editor (`Record` config `TimeSection`, TimeSection-only edits honored), and one-tap camera **clock sync** (`OPTimeSetting`, msg 1450). |
 | LAN discovery | 🟡 Partial | Client probe frame byte-verified; beacon-response parsing implemented but not observed on this camera. |
 
 Full evidence and the honest caveats live in [`PROTOCOL_STATUS.md`](PROTOCOL_STATUS.md).
@@ -87,12 +89,14 @@ Full evidence and the honest caveats live in [`PROTOCOL_STATUS.md`](PROTOCOL_STA
 - 🎥 **Live video** — RTSP (H.265 + PCMA) via `androidx.media3` / `PlayerView`; **full-screen drag-to-steer** PTZ
 - 🎙️ **Push-to-talk** — dedicated talk connection, OPTalk Claim + Start handshake, G.711 A-law upstream
 - 📶 **BLE pairing / Wi-Fi provisioning** — scanner + GATT choreography matched to the factory app; recovers and displays the real provisioned account (not just the factory backdoor) via `GetRandomUser` + AES decryption, independent of BLE ACK capture
-- 🛠️ **Device management** — device info, time, reboot, **username change**, and a generic get/set editor for any named DVRIP config
-- 📖 **Plain-English config docs** — cryptic protocol keys shown with friendly labels + descriptions + decoded on/off values
-- 🖼️ **Friendly Image settings** — flip / mirror / gain / day-night as real controls instead of raw hex
-- 💾 **SD card** — status, format (confirm-gated), and a recorded-clip browser
+- 🛠️ **Device management** — device info, time, reboot, **username / password change**, and a generic get/set editor for any named DVRIP config
+- 📖 **Typed setting controls** — protocol keys shown with friendly labels + descriptions, and edited with the right control for the type: switches for on/off flags, dropdowns for enums, sliders for numeric ranges (no raw hex)
+- 🖼️ **Friendly Image settings** — flip / mirror / gain / day-night as real controls
+- 💾 **SD card & recordings** — storage status, format (confirm-gated), a recorded-clip grid, and **download + in-gallery playback** (private-framed HEVC pulled over DVRIP and remuxed to MP4)
+- 🗓️ **Recording schedule** — a visual weekly editor (per-day windows: off / continuous / on-motion / on-alarm)
+- 🕑 **Camera clock sync** — set the camera's time from the phone in one tap
 - 🔓 **Reveal-password** toggles on every password field
-- 🌙 **Dark, touch-first** Jetpack Compose UI
+- 🎨 **Modern, dark, touch-first** Jetpack Compose UI — one cohesive design system, camera-lens app icon
 - 🩺 **Sanitized diagnostics** screen — never shows credentials or keys
 
 ## Using over a VPN (WireGuard)
@@ -140,7 +144,7 @@ app/src/main/kotlin/com/voidnullvalue/icseelocal/
   config/      Generic named-config get/set channel, field constraint metadata, field docs
   session/     Login negotiator, session manager, keepalive, reconnect backoff, command channel
   ptz/         OPPTZControl JSON builder, press-and-hold controller
-  video/       RTSP player, media stream reassembly, codec probe, snapshot capture
+  video/       RTSP player, media stream reassembly, snapshot capture, recorded-clip download + HEVC→MP4 remux
   audio/       G.711 A-law codec, talk-frame wrapping, microphone capture, talk controller
   ble/         BLE scanner (manufacturer-data beacon match), pairing/Wi-Fi provisioning client + codec
   storage/     Keystore-backed credential storage, DataStore for non-sensitive prefs
@@ -152,7 +156,7 @@ app/src/main/kotlin/com/voidnullvalue/icseelocal/
 |---|---|
 | [`PROTOCOL_NOTES.md`](PROTOCOL_NOTES.md) | The evidence — pcap + live findings, with exact bytes |
 | [`PROTOCOL_STATUS.md`](PROTOCOL_STATUS.md) | Feature-by-feature verified/blocked status |
-| [`PASSWORD_CHANGE_RE.md`](PASSWORD_CHANGE_RE.md) | How credential change works on this firmware (plaintext `ModifyPassword` + `System.ExUserMap`) and why the backdoor makes it moot |
+| [`PASSWORD_CHANGE_RE.md`](PASSWORD_CHANGE_RE.md) | How credential change works on this firmware (via `ChangeRandomUser`, msg 1660 — the `ModifyPassword` variants that only ACK `Ret:100` don't stick) and why the backdoor makes it moot |
 | [`BUILDING_IN_PROOT.md`](BUILDING_IN_PROOT.md) | ARM64 toolchain setup details |
 | [`TESTING.md`](TESTING.md) | Unit tests + opt-in live hardware tests |
 | [`SECURITY.md`](SECURITY.md) | Threat model, the blank-`admin` backdoor finding, crypto/credential-storage choices |
