@@ -269,9 +269,19 @@ fun CameraSettingsScreen(
                 )
             }
 
+            state.saveError?.let {
+                Text(
+                    "Error: $it",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
             Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
                 com.voidnullvalue.icseelocal.ui.components.GradientButton(
-                    text = "Save",
+                    text = if (state.saving) "Saving…" else "Save",
+                    busy = state.saving,
+                    enabled = !state.saving,
                     modifier = Modifier.weight(1f),
                     onClick = { viewModel.save(onDone) },
                 )

@@ -39,6 +39,8 @@ data class CameraSettingsUiState(
     val isExisting: Boolean = false,
     val testResult: String? = null,
     val testing: Boolean = false,
+    val saveError: String? = null,
+    val saving: Boolean = false,
     // Retrieved real account credentials (xkfu or other)
     val retrievedUsername: String? = null,
     val retrievedPassword: String? = null,
@@ -148,39 +150,52 @@ class CameraSettingsViewModel(application: Application) : AndroidViewModel(appli
 
     fun save(onSaved: () -> Unit) {
         val s = _state.value
+        if (s.host.isBlank()) {
+            _state.value = s.copy(saveError = "Host / IP is required.")
+            return
+        }
         viewModelScope.launch {
-            store.save(
-                CameraDescriptor(
-                    id = s.id,
-                    displayName = s.displayName.ifBlank { s.host },
-                    host = s.host,
-                    dvripPort = s.dvripPort.toIntOrNull() ?: 34567,
-                    channel = s.channel.toIntOrNull() ?: 0,
-                    streamType = s.streamType,
-                    rtspFallbackEnabled = s.rtspFallbackEnabled,
-                    rtspPort = s.rtspPort.toIntOrNull() ?: 554,
-                    mac = s.mac,
-                    serialNumber = s.serialNumber,
-                    pid = s.pid,
-                    firmwareVersion = s.firmwareVersion,
-                    httpPort = s.httpPort,
-                    sslPort = s.sslPort,
-                    udpPort = s.udpPort,
-                ),
-                credentials = if (s.username.isNotBlank() || s.password.isNotBlank()) {
-                    CameraCredentials(s.username, s.password)
-                } else {
-                    null
-                },
-            )
-            onSaved()
+            _state.value = _state.value.copy(saving = true, saveError = null)
+            // Persisting encrypts credentials via the Android Keystore, which can
+            // fail on some devices/keystore states -- never let that force-close
+            // the app; surface it so the user can retry.
+            val result = runCatching {
+                store.save(
+                    CameraDescriptor(
+                        id = s.id,
+                        displayName = s.displayName.ifBlank { s.host },
+                        host = s.host,
+                        dvripPort = s.dvripPort.toIntOrNull() ?: 34567,
+                        channel = s.channel.toIntOrNull() ?: 0,
+                        streamType = s.streamType,
+                        rtspFallbackEnabled = s.rtspFallbackEnabled,
+                        rtspPort = s.rtspPort.toIntOrNull() ?: 554,
+                        mac = s.mac,
+                        serialNumber = s.serialNumber,
+                        pid = s.pid,
+                        firmwareVersion = s.firmwareVersion,
+                        httpPort = s.httpPort,
+                        sslPort = s.sslPort,
+                        udpPort = s.udpPort,
+                    ),
+                    credentials = if (s.username.isNotBlank() || s.password.isNotBlank()) {
+                        CameraCredentials(s.username, s.password)
+                    } else {
+                        null
+                    },
+                )
+            }
+            _state.value = _state.value.copy(saving = false)
+            result.onSuccess { onSaved() }
+                .onFailure { _state.value = _state.value.copy(saveError = "Couldn't save this camera: ${it.message ?: it.javaClass.simpleName}") }
         }
     }
 
     fun delete(onDeleted: () -> Unit) {
         viewModelScope.launch {
-            store.delete(_state.value.id)
-            onDeleted()
+            val result = runCatching { store.delete(_state.value.id) }
+            result.onSuccess { onDeleted() }
+                .onFailure { _state.value = _state.value.copy(saveError = "Couldn't delete this camera: ${it.message ?: it.javaClass.simpleName}") }
         }
     }
 
