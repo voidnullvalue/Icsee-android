@@ -1,13 +1,88 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground: camera lens / aperture, matching docs/logo.svg.
+     Drawn in a 512 viewport, sized within the adaptive safe zone (barrel r=144,
+     well inside the ~150 guaranteed-visible radius). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+
+    <!-- barrel ring -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,30 m-20,0 a20,20 0 1,0 40,0 a20,20 0 1,0 -40,0" />
+        android:pathData="M112,256 a144,144 0 1,0 288,0 a144,144 0 1,0 -288,0"
+        android:strokeWidth="18"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="150" android:startY="110" android:endX="360" android:endY="404">
+                <item android:offset="0" android:color="#34D399"/>
+                <item android:offset="0.5" android:color="#2DD4BF"/>
+                <item android:offset="1" android:color="#22D3EE"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- glass ring -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M24,60 h60 v28 h-60 z" />
+        android:pathData="M146,256 a110,110 0 1,0 220,0 a110,110 0 1,0 -220,0"
+        android:strokeColor="#22D3EE"
+        android:strokeAlpha="0.55"
+        android:strokeWidth="6"
+        android:fillColor="#00000000"/>
+
+    <!-- aperture: hexagon + swirling iris blades -->
+    <path
+        android:pathData="M256,171.4 L329.3,213.7 L329.3,298.3 L256,340.6 L182.7,298.3 L182.7,213.7 Z M256,171.4 L240.4,229 M329.3,213.7 L271.6,229 M329.3,298.3 L287.3,256 M256,340.6 L271.6,283 M182.7,298.3 L240.4,283 M182.7,213.7 L224.7,256"
+        android:strokeWidth="12"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="150" android:startY="110" android:endX="360" android:endY="404">
+                <item android:offset="0" android:color="#34D399"/>
+                <item android:offset="0.5" android:color="#2DD4BF"/>
+                <item android:offset="1" android:color="#22D3EE"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- pupil -->
+    <path
+        android:pathData="M228.4,256 a27.6,27.6 0 1,0 55.2,0 a27.6,27.6 0 1,0 -55.2,0"
+        android:fillColor="#0B1220"
+        android:strokeWidth="8">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="150" android:startY="110" android:endX="360" android:endY="404">
+                <item android:offset="0" android:color="#34D399"/>
+                <item android:offset="0.5" android:color="#2DD4BF"/>
+                <item android:offset="1" android:color="#22D3EE"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- inner dot -->
+    <path android:pathData="M244,256 a12,12 0 1,0 24,0 a12,12 0 1,0 -24,0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="244" android:startY="244" android:endX="268" android:endY="268">
+                <item android:offset="0" android:color="#34D399"/>
+                <item android:offset="1" android:color="#22D3EE"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- specular glint on the pupil -->
+    <path
+        android:pathData="M241.7,247.7 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0"
+        android:fillColor="#EAFFFB"
+        android:fillAlpha="0.9"/>
+
+    <!-- glass glint on the barrel (top-left) -->
+    <path
+        android:pathData="M154.8,154.8 A144,144 0 0 1 223.8,116.2"
+        android:strokeColor="#A7F3E8"
+        android:strokeAlpha="0.85"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"/>
 </vector>

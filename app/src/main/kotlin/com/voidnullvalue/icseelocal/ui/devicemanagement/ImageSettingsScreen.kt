@@ -53,11 +53,10 @@ fun ImageSettingsScreen(
     val editableParam = remember(param) { param?.let { EditableJson.from(it) } }
     val editableParamEx = remember(paramEx) { paramEx?.let { EditableJson.from(it) } }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Image settings") }) }) { padding ->
+    com.voidnullvalue.icseelocal.ui.components.AppScaffold(title = "Image settings", onBack = onBack) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
             if (editableParam == null && editableParamEx == null) {
-                Text("Image settings aren't loaded yet, or this camera doesn't expose them.")
-                Button(onClick = onBack, modifier = Modifier.padding(top = 16.dp)) { Text("Back") }
+                Text("Image settings aren't loaded yet, or this camera doesn't expose them.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 return@Column
             }
 
@@ -88,15 +87,16 @@ fun ImageSettingsScreen(
             state.errorMessage?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)) }
             state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp)) }
 
-            Button(
+            com.voidnullvalue.icseelocal.ui.components.GradientButton(
+                text = "Save",
+                busy = state.busy,
+                enabled = !state.busy,
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                 onClick = {
                     editableParam?.let { viewModel.saveConfig("Camera.Param", it.toJsonElement()) }
                     editableParamEx?.let { viewModel.saveConfig("Camera.ParamEx", it.toJsonElement()) }
                 },
-                enabled = !state.busy,
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-            ) { Text("Save") }
-            Button(onClick = onBack, modifier = Modifier.padding(top = 8.dp)) { Text("Back") }
+            )
         }
     }
 }

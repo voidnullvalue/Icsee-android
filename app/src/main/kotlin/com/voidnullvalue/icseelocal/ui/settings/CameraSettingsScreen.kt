@@ -2,6 +2,7 @@ package com.voidnullvalue.icseelocal.ui.settings
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -65,7 +66,10 @@ fun CameraSettingsScreen(
     }
     val state by viewModel.state.collectAsState()
 
-    Scaffold(topBar = { TopAppBar(title = { Text(if (state.isExisting) "Camera settings" else "Add camera") }) }) { padding ->
+    com.voidnullvalue.icseelocal.ui.components.AppScaffold(
+        title = if (state.isExisting) "Camera settings" else "Add camera",
+        onBack = onDone,
+    ) { padding ->
         Column(
             Modifier.padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
         ) {
@@ -266,9 +270,21 @@ fun CameraSettingsScreen(
             }
 
             Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
-                Button(onClick = { viewModel.save(onDone) }, modifier = Modifier.padding(end = 8.dp)) { Text("Save") }
+                com.voidnullvalue.icseelocal.ui.components.GradientButton(
+                    text = "Save",
+                    modifier = Modifier.weight(1f),
+                    onClick = { viewModel.save(onDone) },
+                )
                 if (state.isExisting) {
-                    Button(onClick = { viewModel.delete(onDone) }) { Text("Delete") }
+                    androidx.compose.foundation.layout.Spacer(Modifier.width(10.dp))
+                    Button(
+                        onClick = { viewModel.delete(onDone) },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        ),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                    ) { Text("Delete") }
                 }
             }
         }

@@ -78,7 +78,7 @@ fun BlePairingScreen(
     }
     DisposableEffect(Unit) { onDispose { viewModel.stopScan() } }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Pair camera via Bluetooth") }) }) { padding ->
+    com.voidnullvalue.icseelocal.ui.components.AppScaffold(title = "Pair via Bluetooth", onBack = onCancel) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
             when (val state = pairingState) {
                 is BlePairingUiState.Idle -> {

@@ -47,7 +47,7 @@ fun PtzPadButton(
     val fg = if (pressed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     Box(
         modifier
-            .size(72.dp)
+            .size(94.dp)
             .clip(CircleShape)
             .background(bg)
             .pointerInput(Unit) {
@@ -62,6 +62,6 @@ fun PtzPadButton(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription, tint = fg, modifier = Modifier.size(34.dp))
+        Icon(icon, contentDescription, tint = fg, modifier = Modifier.size(44.dp))
     }
 }

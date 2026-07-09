@@ -92,7 +92,91 @@ object ConfigFieldDocs {
         "SSLPort" to FieldDoc("SSL port", "TLS port for secure connections (default 8443, range 1-65535)."),
         "HostName" to FieldDoc("Device name", "Camera's network hostname (alphanumeric + hyphen, max 32 chars)."),
         "MAC" to FieldDoc("MAC address", "Hardware network address (read-only, format: HH:HH:HH:HH:HH:HH)."),
+        "DvrMac" to FieldDoc("MAC address", "Hardware network address (read-only)."),
+        "GateWay" to FieldDoc("Gateway", "Your router's IP address (e.g. 192.168.1.1)."),
+        "HostIP" to FieldDoc("IP address", "The camera's IP address on your network."),
+        "Submask" to FieldDoc("Subnet mask", "Network mask, usually 255.255.255.0."),
+        "MaxBps" to FieldDoc("Bandwidth cap", "Maximum upload bitrate the camera will use (kbps)."),
+        "UseHSDownLoad" to FieldDoc("High-speed download", "Allow faster-than-realtime clip download (0=Off, 1=On).", ONOFF),
+        "TransferPlan" to FieldDoc(
+            "Streaming priority",
+            "What the camera optimises the stream for. 0=Quality, 1=Balanced, 2=Realtime (lower latency).",
+            mapOf("0" to "Quality", "1" to "Balanced", "2" to "Realtime"),
+        ),
+
+        // --- Record (recording schedule) ---
+        "PreRecord" to FieldDoc("Pre-record (s)", "Seconds of video kept from *before* an event triggers. Range 0-30, typical 5."),
+        "Redundancy" to FieldDoc("Redundant recording", "Write a second copy to a backup disk if present (0=Off, 1=On).", ONOFF),
+        "RecordMode" to FieldDoc(
+            "Record mode",
+            "How recording is decided. \"ConfigDesc\" = follow this weekly schedule; \"ManualDesc\" = always record now; \"ClosedDesc\" = never record.",
+            mapOf("ConfigDesc" to "By schedule", "ManualDesc" to "Always (manual)", "ClosedDesc" to "Off"),
+        ),
+        "PacketLength" to FieldDoc("Clip length (min)", "How long each recorded file is before a new one starts. Range 1-120, typical 5-30."),
+        "Channel" to FieldDoc("Channel", "Video channel number. Single-lens cameras always use 0."),
+        "Mask" to FieldDoc("Schedule mask", "Low-level per-slot on/off bitmap for the weekly schedule. Prefer the time-section view above; editing this raw is rarely needed."),
+        "TimeSection" to FieldDoc(
+            "Time section",
+            "One scheduled window: \"<type> HH:MM:SS-HH:MM:SS\". The leading number is what to record — 0=nothing, 1=continuous, 2=on motion, 4=on alarm (add them, e.g. 6 = motion+alarm). Example: \"1 00:00:00-24:00:00\" records continuously all day.",
+        ),
+        "WorkSheet" to FieldDoc("Weekly schedule", "The per-day list of recording time sections (Sunday first)."),
+
+        // --- General extras ---
+        "OverWrite" to FieldDoc(
+            "When card is full",
+            "\"OverWrite\" loops and erases the oldest footage; \"KeepClose\" stops recording instead.",
+            mapOf("OverWrite" to "Loop (erase oldest)", "KeepClose" to "Stop recording"),
+        ),
+        "LocalNo" to FieldDoc("Device number", "Remote-control address for this device (0-998). Leave as-is if unsure."),
+        "MachineName" to FieldDoc("Device name", "Friendly name shown for this camera."),
+        "VideoStandard" to FieldDoc(
+            "Video standard",
+            "Regional frame-rate standard. PAL (50 Hz regions) or NTSC (60 Hz regions).",
+            mapOf("PAL" to "PAL (50 Hz)", "NTSC" to "NTSC (60 Hz)"),
+        ),
+        "AutoLogoutTime" to FieldDoc("Auto-logout (min)", "Minutes before the local menu auto-logs out (0=never)."),
+
+        // --- OSD / overlay ---
+        "TimeTitleAttribute" to FieldDoc("Show timestamp", "Overlay the date/time on the picture."),
+        "ChannelTitleAttribute" to FieldDoc("Show camera name", "Overlay the channel/camera name on the picture."),
+        "EncodeBlend" to FieldDoc("Overlay on recording", "Burn the timestamp/name into recorded video too, not just the live view."),
+
+        // --- Detect extras ---
+        "SendMail" to FieldDoc("Email alert", "Email a notification when this event fires (0=Off, 1=On).", ONOFF),
+        "EventHandler" to FieldDoc("Event actions", "What the camera does when this detector triggers (record, snapshot, notify, …)."),
+    )
+
+    /**
+     * A one-paragraph explanation shown at the top of the generic editor for a
+     * whole config, so screens like the recording schedule aren't a wall of
+     * unexplained fields. Keyed by config name (e.g. "Record").
+     */
+    private val configIntros: Map<String, String> = mapOf(
+        "Record" to "Weekly recording schedule. Each day has up to six time sections; a section's leading number is what to record in that window — 0 = nothing, 1 = continuously, 2 = on motion, 4 = on alarm (add them together for combinations). \"RecordMode\" must be \"By schedule\" for this to apply.",
+        "Detect.MotionDetect" to "Motion detection and what happens when motion is seen. Turn it on, set the sensitivity, then choose the actions (record, snapshot, push notification, buzzer, …).",
+        "General.General" to "General device options: naming, auto-logout, what to do when the SD card fills up, and the regional video standard.",
+        "NetWork.NetCommon" to "Core network settings — IP address, gateway, ports, and bandwidth. Change with care: a wrong value here can make the camera unreachable.",
     )
 
     fun forKey(key: String): FieldDoc? = docs[key]
+
+    fun configIntro(configName: String): String? = configIntros[configName]
+
+    /**
+     * Turns a raw protocol key with no [FieldDoc] into something readable, so
+     * unknown fields show "Pre Record" rather than "PreRecord". Splits camelCase
+     * / PascalCase / snake_case and title-cases the words.
+     */
+    fun humanize(key: String): String {
+        if (key.isBlank()) return key
+        val spaced = key
+            .replace('_', ' ')
+            .replace(Regex("([a-z0-9])([A-Z])"), "$1 $2")
+            .replace(Regex("([A-Z]+)([A-Z][a-z])"), "$1 $2")
+            .trim()
+        return spaced.split(' ').joinToString(" ") { w ->
+            if (w.length > 1 && w.all { it.isUpperCase() }) w // keep acronyms (IP, MAC)
+            else w.replaceFirstChar { it.uppercase() }
+        }
+    }
 }

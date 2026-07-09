@@ -1,37 +1,64 @@
 package com.voidnullvalue.icseelocal.ui.devicemanagement
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material.icons.filled.Password
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.SdStorage
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.voidnullvalue.icseelocal.model.ConnectionState
+import com.voidnullvalue.icseelocal.ui.components.AppScaffold
+import com.voidnullvalue.icseelocal.ui.components.GradientButton
+import com.voidnullvalue.icseelocal.ui.components.NavTile
+import com.voidnullvalue.icseelocal.ui.components.SectionCard
+import com.voidnullvalue.icseelocal.ui.components.StatusColors
+import com.voidnullvalue.icseelocal.ui.components.StatusPill
 import com.voidnullvalue.icseelocal.ui.components.RevealablePasswordField
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,26 +79,25 @@ fun DeviceManagementScreen(
     var showPasswordDialog by remember { mutableStateOf(false) }
     var showUsernameDialog by remember { mutableStateOf(false) }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Device management") }) }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
-            Text(
-                when (state.connectionState) {
-                    is ConnectionState.Authenticated -> "Connected"
-                    is ConnectionState.Failed -> "Connection failed"
-                    else -> "Connecting…"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-            if (state.busy) CircularProgressIndicator(Modifier.padding(bottom = 8.dp))
-            state.errorMessage?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp)) }
-            state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 8.dp)) }
+    AppScaffold(title = "Device management", onBack = onBack) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                val (label, dot) = when (state.connectionState) {
+                    is ConnectionState.Authenticated -> "Connected" to StatusColors.ok
+                    is ConnectionState.Failed -> "Connection failed" to StatusColors.bad
+                    else -> "Connecting…" to StatusColors.warn
+                }
+                StatusPill(label, dot)
+                Spacer(Modifier.weight(1f))
+                if (state.busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+            state.errorMessage?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp)) }
+            state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp)) }
 
-            // -- Device info --
-            SectionCard(title = "Device info") {
+            SectionCard(title = "Device info", icon = Icons.Default.Info) {
                 val info = state.systemInfo
                 if (info == null) {
-                    Text("Not loaded yet", style = MaterialTheme.typography.bodySmall)
+                    Text("Not loaded yet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     SelectionContainer {
                         Column {
@@ -87,75 +113,75 @@ fun DeviceManagementScreen(
                 }
             }
 
-            // -- Time --
-            SectionCard(title = "Device time") {
-                Text(state.deviceTime ?: "Not queried yet", style = MaterialTheme.typography.bodyMedium)
-                Row(Modifier.padding(top = 8.dp)) {
-                    Button(onClick = { viewModel.refreshTime() }) { Text("Query time") }
-                }
+            SectionCard(title = "Device time", icon = Icons.Default.AccessTime) {
+                Text(state.deviceTime ?: "Not queried yet", style = MaterialTheme.typography.bodyLarge)
+                Spacer(Modifier.height(12.dp))
+                GradientButton("Query time", onClick = { viewModel.refreshTime() })
             }
 
-            // -- Storage --
-            SectionCard(title = "SD card") {
-                val storage = state.storageInfo
-                if (storage == null) {
-                    Text("No card detected, or not loaded yet", style = MaterialTheme.typography.bodySmall)
+            SectionCard(title = "SD card", icon = Icons.Default.SdStorage) {
+                val summary = state.storageInfo?.let { storageSummary(it.toString()) }
+                if (summary == null) {
+                    Text("No card detected, or not loaded yet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    Text(storage.toString(), style = MaterialTheme.typography.bodySmall)
+                    Text(summary.first, style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { summary.second },
+                        modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(50)),
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    )
                 }
-                Row(Modifier.padding(top = 8.dp)) {
-                    Button(onClick = onOpenRecordings, modifier = Modifier.padding(end = 8.dp)) { Text("Recordings") }
-                    Button(
-                        onClick = { viewModel.requestFormat() },
-                        enabled = storage != null,
-                    ) { Text("Format card") }
-                }
+                Spacer(Modifier.height(14.dp))
+                NavTile(icon = Icons.Default.Videocam, title = "Recordings", subtitle = "Browse & download clips", onClick = onOpenRecordings)
+                Spacer(Modifier.height(8.dp))
+                DangerButton("Format card", enabled = state.storageInfo != null) { viewModel.requestFormat() }
             }
 
-            // -- Friendly settings screens --
-            SectionCard(title = "Settings") {
-                val imageAvailable = state.configValues.containsKey("Camera.Param") ||
-                    state.configValues.containsKey("Camera.ParamEx")
-                Button(onClick = onOpenImageSettings, enabled = imageAvailable) {
-                    Text(if (imageAvailable) "Image settings" else "Image settings (not available)")
-                }
+            SectionCard(title = "Settings", icon = Icons.Default.Tune) {
+                val imageAvailable = state.configValues.containsKey("Camera.Param") || state.configValues.containsKey("Camera.ParamEx")
+                NavTile(
+                    icon = Icons.Default.Tune,
+                    title = "Image settings",
+                    subtitle = if (imageAvailable) "Exposure, day/night, white balance…" else "Not available on this camera",
+                    enabled = imageAvailable,
+                    onClick = onOpenImageSettings,
+                )
             }
 
-            // -- Advanced named configs (generic JSON editor) --
-            SectionCard(title = "Advanced settings") {
+            SectionCard(title = "Advanced settings", icon = Icons.Default.Tune) {
                 AdvancedConfig.entries.forEach { cfg ->
                     val available = state.configValues.containsKey(cfg.configName)
-                    TextButton(
-                        onClick = { onOpenConfig(cfg.configName, cfg.label) },
+                    NavTile(
+                        icon = Icons.Default.Tune,
+                        title = cfg.label,
+                        subtitle = if (available) null else "Unsupported by this camera",
                         enabled = available,
-                    ) {
-                        Text(if (available) cfg.label else "${cfg.label} (unsupported by this camera)")
-                    }
+                        onClick = { onOpenConfig(cfg.configName, cfg.label) },
+                    )
                 }
             }
 
-            // -- Change credentials --
-            SectionCard(title = "Login") {
-                Row {
-                    Button(onClick = { showUsernameDialog = true }, modifier = Modifier.padding(end = 8.dp)) { Text("Change username") }
-                    Button(onClick = { showPasswordDialog = true }) { Text("Change password") }
-                }
+            SectionCard(title = "Login", icon = Icons.Default.Lock) {
+                NavTile(icon = Icons.Default.Person, title = "Change username", onClick = { showUsernameDialog = true })
+                Spacer(Modifier.height(8.dp))
+                NavTile(icon = Icons.Default.Password, title = "Change password", onClick = { showPasswordDialog = true })
             }
 
-            // -- Accounts (diagnostic: which account are we actually on?) --
-            SectionCard(title = "Accounts on this camera") {
+            SectionCard(title = "Accounts on this camera", icon = Icons.Default.ManageAccounts) {
                 Text(
                     "Shows the camera's own account list. The blank-password \"admin\" backdoor is " +
                         "flagged \"factory test account\"; the real per-device admin is a random name.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Button(
-                    onClick = { viewModel.loadAccounts() },
+                Spacer(Modifier.height(12.dp))
+                GradientButton(
+                    text = if (state.accountsQuerying) "Reading…" else "Show accounts",
+                    busy = state.accountsQuerying,
                     enabled = state.connectionState is ConnectionState.Authenticated && !state.accountsQuerying,
-                    modifier = Modifier.padding(top = 8.dp),
-                ) { Text(if (state.accountsQuerying) "Reading…" else "Show accounts") }
-
+                    onClick = { viewModel.loadAccounts() },
+                )
                 state.accounts?.let { accounts ->
                     if (accounts.isEmpty()) {
                         Text("No accounts returned.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
@@ -165,12 +191,10 @@ fun DeviceManagementScreen(
                 }
             }
 
-            // -- Reboot --
-            SectionCard(title = "Power") {
-                Button(onClick = { viewModel.requestReboot() }) { Text("Reboot camera") }
+            SectionCard(title = "Power", icon = Icons.Default.PowerSettingsNew) {
+                DangerButton("Reboot camera", icon = Icons.Default.RestartAlt) { viewModel.requestReboot() }
             }
-
-            Button(onClick = onBack, modifier = Modifier.padding(top = 16.dp)) { Text("Back") }
+            Spacer(Modifier.height(24.dp))
         }
     }
 
@@ -202,14 +226,38 @@ fun DeviceManagementScreen(
     }
 }
 
+/** Destructive action button (error-tinted, rounded). */
 @Composable
-private fun SectionCard(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-        Column(Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
-            content()
+private fun DangerButton(text: String, icon: ImageVector? = null, enabled: Boolean = true, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        ),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
         }
+        Text(text, fontWeight = FontWeight.SemiBold)
     }
+}
+
+/** Parses TotalSpace/RemainSpace (MB, hex or decimal) into a "X GB free of Y GB" + used fraction. */
+private fun storageSummary(json: String): Pair<String, Float>? {
+    fun num(key: String) = Regex("\"$key\"\\s*:\\s*\"?(0x[0-9a-fA-F]+|\\d+)").find(json)?.groupValues?.get(1)
+    val total = num("TotalSpace") ?: return null
+    val remain = num("RemainSpace") ?: return null
+    fun parse(s: String) = if (s.startsWith("0x")) s.substring(2).toLong(16) else s.toLong()
+    val totalMb = parse(total)
+    val remainMb = parse(remain)
+    if (totalMb <= 0) return null
+    val usedMb = (totalMb - remainMb).coerceIn(0, totalMb)
+    val gb = 1024.0
+    return "%.1f GB free of %.1f GB".format(remainMb / gb, totalMb / gb) to (usedMb.toFloat() / totalMb.toFloat())
 }
 
 @Composable

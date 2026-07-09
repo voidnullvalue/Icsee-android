@@ -41,16 +41,7 @@ fun DiagnosticsScreen(
     val state by viewModel.connectionState.collectAsState()
     val videoStats by viewModel.videoStats.collectAsState()
 
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("Diagnostics") },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                }
-            }
-        )
-    }) { padding ->
+    com.voidnullvalue.icseelocal.ui.components.AppScaffold(title = "Diagnostics", onBack = onBack) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
             DiagnosticRow("Connection state", state.label)
             DiagnosticRow("Camera address", camera?.let { "${it.host}:${it.dvripPort}" } ?: "-")

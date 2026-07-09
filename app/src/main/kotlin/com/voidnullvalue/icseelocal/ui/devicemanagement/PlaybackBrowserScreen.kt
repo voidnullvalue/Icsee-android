@@ -53,7 +53,7 @@ fun PlaybackBrowserScreen(
         viewModel.loadAllRecordings()
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Recordings") }) }) { padding ->
+    com.voidnullvalue.icseelocal.ui.components.AppScaffold(title = "Recordings", onBack = onBack) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { viewModel.loadAllRecordings() }, enabled = !state.recordingsQuerying) {
@@ -111,7 +111,6 @@ fun PlaybackBrowserScreen(
                 }
             }
 
-            Button(onClick = onBack, modifier = Modifier.padding(top = 12.dp)) { Text("Back") }
         }
     }
 }

@@ -70,6 +70,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -572,6 +574,7 @@ private fun VideoSurface(viewModel: LiveControlViewModel, rtspState: RtspPlayerS
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PresetBar(onGoto: (Int) -> Unit, onSave: (Int) -> Unit) {
+    val haptics = LocalHapticFeedback.current
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = 8.dp)) {
         Text(
             "Presets — tap to recall, hold to save",
@@ -585,7 +588,13 @@ private fun PresetBar(onGoto: (Int) -> Unit, onSave: (Int) -> Unit) {
                         .size(44.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.secondaryContainer)
-                        .combinedClickable(onClick = { onGoto(n) }, onLongClick = { onSave(n) }),
+                        .combinedClickable(
+                            onClick = { onGoto(n) },
+                            onLongClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSave(n)
+                            },
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text("$n", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSecondaryContainer)

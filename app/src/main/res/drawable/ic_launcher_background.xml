@@ -1,10 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon background: dark navy with a soft radial glow, matching
+     docs/logo.svg and the README palette. Bleeds to the edges so any launcher
+     mask (circle / squircle / rounded) crops cleanly. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#1B2733"
-        android:pathData="M0,0 h108 v108 h-108 z" />
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <path android:pathData="M0,0 h512 v512 h-512 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="256"
+                android:centerY="238"
+                android:gradientRadius="300"
+                android:startColor="#12324A"
+                android:endColor="#0B1220" />
+        </aapt:attr>
+    </path>
 </vector>

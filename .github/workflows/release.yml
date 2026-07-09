@@ -74,6 +74,8 @@ jobs:
             '' \
             'Signed with the standard Android debug key so it is sideload-installable;' \
             'swap in a real keystore/signing config to publish through a store.' \
+            '' \
+            '<sub>♪ ..._that'"'"'s the melody to funkytown_ ♪</sub>' \
             > release-notes.md
           gh release create "${{ github.ref_name }}" \
             "${{ steps.name.outputs.apk }}" \

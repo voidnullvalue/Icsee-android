@@ -4,26 +4,37 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.voidnullvalue.icseelocal.config.ConfigFieldDocs
 import com.voidnullvalue.icseelocal.config.ConfigMetadataCache
+import kotlin.math.roundToLong
 
 /**
- * Recursive editor for an [EditableJson] tree -- see that file's doc for why
- * one generic editor covers every named DVRIP config rather than a bespoke
- * screen per config name. Renders each object key as a labeled row; nested
- * objects/arrays indent one level; array items are labeled by index.
+ * Recursive editor for an [EditableJson] tree. Each leaf is rendered with a
+ * control matched to what the setting actually is -- a Switch for on/off flags,
+ * a dropdown of friendly options for enums ([ConfigFieldDocs] value maps), a
+ * slider for numeric ranges (inferred [ConfigMetadataCache] constraints), and a
+ * plain field only as a last resort -- instead of exposing raw protocol values.
  */
 @Composable
 fun JsonEditorNode(
@@ -33,80 +44,162 @@ fun JsonEditorNode(
     metadata: ConfigMetadataCache? = null,
     pathPrefix: String = "",
 ) {
-    val indent = (depth * 12).dp
+    // No indentation: every field aligns to the same left edge. Hierarchy is
+    // shown with section headers + spacing instead of stair-stepping.
     when (node) {
         is EditableJson.Obj -> {
             if (depth > 0) {
-                Text(name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = indent, top = 8.dp, bottom = 2.dp))
+                Text(
+                    ConfigFieldDocs.humanize(name),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                )
             }
-            Column(Modifier.padding(start = if (depth > 0) 8.dp else 0.dp)) {
-                node.entries.forEach { (key, value) ->
-                    val newPath = if (pathPrefix.isEmpty()) key else "$pathPrefix/$key"
-                    JsonEditorNode(key, value, depth + 1, metadata, newPath)
-                }
+            node.entries.forEach { (key, value) ->
+                val newPath = if (pathPrefix.isEmpty()) key else "$pathPrefix/$key"
+                JsonEditorNode(key, value, depth + 1, metadata, newPath)
             }
         }
         is EditableJson.Arr -> {
-            Text(name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = indent, top = 8.dp, bottom = 2.dp))
-            Column(Modifier.padding(start = 8.dp)) {
-                node.items.forEachIndexed { i, item ->
-                    val newPath = if (pathPrefix.isEmpty()) "[$i]" else "$pathPrefix/[$i]"
-                    JsonEditorNode("[$i]", item, depth + 1, metadata, newPath)
-                }
+            node.items.forEachIndexed { i, item ->
+                val newPath = if (pathPrefix.isEmpty()) "[$i]" else "$pathPrefix/[$i]"
+                // Only number the entries when there's more than one.
+                val itemName = if (node.items.size > 1) "${ConfigFieldDocs.humanize(name)} ${i + 1}" else name
+                JsonEditorNode(itemName, item, depth, metadata, newPath)
             }
         }
         is EditableJson.Null -> {
-            Text("$name: null", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = indent, top = 2.dp, bottom = 2.dp))
+            Text(
+                "${ConfigFieldDocs.humanize(name)}: —",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 3.dp),
+            )
         }
-        is EditableJson.Prim -> {
-            var text by node.text
-            val doc = ConfigFieldDocs.forKey(name)
-            val hint = metadata?.fields?.get(pathPrefix)?.hint() ?: ""
-            // Prefer the friendly label; keep the raw key in parentheses so it's
-            // still identifiable, and append the inferred-range hint.
-            val display = doc?.label ?: name
-            val labelText = buildString {
-                append(display)
-                if (doc != null) append(" ($name)")
-                if (hint.isNotEmpty()) append(" $hint")
-            }
-            // If we know what the stored value means, show it (e.g. "0x00000001 -> On").
-            val decoded = doc?.values?.get(text)
+        is EditableJson.Prim -> PrimEditor(name, node, metadata, pathPrefix)
+    }
+}
 
-            if (node.kind == EditableJson.Prim.Kind.BOOLEAN) {
-                Column(Modifier.padding(start = indent, top = 2.dp, bottom = 2.dp)) {
-                    Row(Modifier.fillMaxWidth()) {
-                        Checkbox(checked = text.toBooleanStrictOrNull() ?: false, onCheckedChange = { text = it.toString() })
-                        Text(labelText, modifier = Modifier.padding(top = 12.dp, start = 4.dp))
-                    }
-                    doc?.description?.let {
-                        Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
-                    }
+@Composable
+private fun PrimEditor(
+    name: String,
+    node: EditableJson.Prim,
+    metadata: ConfigMetadataCache?,
+    pathPrefix: String,
+) {
+    var text by node.text
+    val doc = ConfigFieldDocs.forKey(name)
+    val constraints = metadata?.fields?.get(pathPrefix)
+    val labelText = doc?.label ?: ConfigFieldDocs.humanize(name)
+    val desc = doc?.description
+    val values = doc?.values ?: emptyMap()
+    val isOnOff = values.values.toSet() == setOf("Off", "On")
+
+    Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp)) {
+        when {
+            node.kind == EditableJson.Prim.Kind.BOOLEAN ->
+                SwitchField(labelText, desc, (text.toBooleanStrictOrNull() ?: false)) { text = it.toString() }
+
+            isOnOff ->
+                SwitchField(labelText, desc, values[text] == "On") { on ->
+                    text = pickOnOffKey(values, on, text.startsWith("0x"))
                 }
-            } else {
-                Column(Modifier.fillMaxWidth().padding(start = indent, top = 2.dp, bottom = 2.dp)) {
-                    OutlinedTextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        label = { Text(labelText, fontSize = 12.sp) },
-                        supportingText = if (decoded != null) {
-                            { Text("= $decoded", fontSize = 11.sp) }
-                        } else null,
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = when (node.kind) {
-                                EditableJson.Prim.Kind.INT, EditableJson.Prim.Kind.LONG -> KeyboardType.Number
-                                EditableJson.Prim.Kind.DOUBLE -> KeyboardType.Decimal
-                                else -> KeyboardType.Text
-                            },
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    doc?.description?.let {
-                        Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, top = 1.dp))
-                    }
-                }
+
+            values.isNotEmpty() ->
+                EnumDropdown(labelText, desc, text, values) { text = it }
+
+            constraints?.kind == "INT" && constraints.minInt != null && constraints.maxInt != null ->
+                IntSliderField(labelText, desc, text, constraints.minInt!!, constraints.maxInt!!) { text = it }
+
+            else -> {
+                val decoded = doc?.values?.get(text)
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text(labelText, fontSize = 12.sp) },
+                    supportingText = if (decoded != null) ({ Text("= $decoded", fontSize = 11.sp) }) else null,
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = when (node.kind) {
+                            EditableJson.Prim.Kind.INT, EditableJson.Prim.Kind.LONG -> KeyboardType.Number
+                            EditableJson.Prim.Kind.DOUBLE -> KeyboardType.Decimal
+                            else -> KeyboardType.Text
+                        },
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                desc?.let { Description(it) }
             }
         }
     }
+}
+
+@Composable
+private fun SwitchField(label: String, desc: String?, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            desc?.let { Description(it) }
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EnumDropdown(label: String, desc: String?, current: String, values: Map<String, String>, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val display = values[current] ?: current
+    Column(Modifier.fillMaxWidth()) {
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+            OutlinedTextField(
+                value = display,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text(label, fontSize = 12.sp) },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier.menuAnchor().fillMaxWidth(),
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                values.forEach { (raw, friendly) ->
+                    DropdownMenuItem(
+                        text = { Text(friendly) },
+                        onClick = { onSelect(raw); expanded = false },
+                    )
+                }
+            }
+        }
+        desc?.let { Description(it) }
+    }
+}
+
+@Composable
+private fun IntSliderField(label: String, desc: String?, current: String, min: Long, max: Long, onChange: (String) -> Unit) {
+    val cur = (current.toLongOrNull() ?: min).coerceIn(min, max)
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Text("$cur", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.widthIn(min = 36.dp))
+        }
+        Slider(
+            value = cur.toFloat(),
+            onValueChange = { onChange(it.roundToLong().coerceIn(min, max).toString()) },
+            valueRange = min.toFloat()..max.toFloat(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        desc?.let { Description(it) }
+    }
+}
+
+@Composable
+private fun Description(text: String) {
+    Text(text, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 1.dp))
+}
+
+/** Picks the raw on/off key matching the current value's format (hex vs decimal). */
+private fun pickOnOffKey(values: Map<String, String>, on: Boolean, preferHex: Boolean): String {
+    val target = if (on) "On" else "Off"
+    val candidates = values.filterValues { it == target }.keys
+    return candidates.firstOrNull { it.startsWith("0x") == preferHex } ?: candidates.firstOrNull() ?: (if (on) "1" else "0")
 }
