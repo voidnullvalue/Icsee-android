@@ -27,20 +27,27 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -60,10 +67,12 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import java.io.File
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
-
+import kotlin.math.abs
 private val ActivityGreen = Color(0xFF22C55E)
 
 /**
@@ -347,17 +356,60 @@ fun ClipPlayerDialog(
 ) {
     val context = LocalContext.current
     var playerError by remember { mutableStateOf<String?>(null) }
-    val player = remember {
-        com.voidnullvalue.icseelocal.video.RobustClipPlayer.create(context) { msg ->
-            playerError = msg
-        }
+    var speedIndex by remember {
+        mutableIntStateOf(com.voidnullvalue.icseelocal.video.RobustClipPlayer.DEFAULT_SPEED_INDEX)
+    }
+    var volume by remember { mutableFloatStateOf(1f) }
+    var muted by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    val pendingStart = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    val speeds = com.voidnullvalue.icseelocal.video.RobustClipPlayer.SPEED_STEPS
+    val speed = speeds[speedIndex.coerceIn(0, speeds.lastIndex)]
+
+    val player = remember(context.applicationContext) {
+        com.voidnullvalue.icseelocal.video.RobustClipPlayer.create(
+            context = context,
+            pendingStart = pendingStart,
+        ) { msg -> playerError = msg }
     }
     LaunchedEffect(uri) {
         playerError = null
-        if (uri.isNullOrBlank()) return@LaunchedEffect
-        com.voidnullvalue.icseelocal.video.RobustClipPlayer.play(player, uri)
+        speedIndex = com.voidnullvalue.icseelocal.video.RobustClipPlayer.DEFAULT_SPEED_INDEX
+        volume = 1f
+        muted = false
+        player.volume = 1f
+        if (uri.isNullOrBlank()) {
+            pendingStart.set(false)
+            player.stop()
+            player.clearMediaItems()
+            return@LaunchedEffect
+        }
+        com.voidnullvalue.icseelocal.video.RobustClipPlayer.play(player, uri, pendingStart)
     }
-    DisposableEffect(Unit) { onDispose { player.release() } }
+    LaunchedEffect(volume, muted) {
+        player.volume = if (muted) 0f else volume.coerceIn(0f, 1f)
+    }
+    // Forward: ExoPlayer rate. Reverse: scrub seek loop (−1×…−4×).
+    LaunchedEffect(speed, uri) {
+        if (uri.isNullOrBlank()) return@LaunchedEffect
+        if (speed > 0f) {
+            com.voidnullvalue.icseelocal.video.RobustClipPlayer.applyForwardSpeed(player, speed)
+            return@LaunchedEffect
+        }
+        // Reverse scrub — pause normal play and step backward by |speed|.
+        player.setPlaybackSpeed(1f)
+        player.playWhenReady = false
+        val tickMs = 200L
+        val absSpeed = abs(speed).coerceAtLeast(0.25f)
+        while (isActive) {
+            val pos = player.currentPosition
+            if (pos <= 0L) break
+            val step = (tickMs * absSpeed).toLong().coerceAtLeast(1L)
+            player.seekTo((pos - step).coerceAtLeast(0L))
+            delay(tickMs)
+        }
+    }
+    DisposableEffect(player) { onDispose { player.release() } }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(
@@ -371,7 +423,7 @@ fun ClipPlayerDialog(
                         PlayerView(ctx).apply {
                             this.player = player
                             useController = true
-                            setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                            setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
                         }
                     },
                     update = { it.player = player },
@@ -385,24 +437,20 @@ fun ClipPlayerDialog(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     CircularProgressIndicator(color = Color.White)
-                    Text("Starting stream…", color = Color.White)
+                    Text("Loading recording…", color = Color.White, fontWeight = FontWeight.Medium)
+                    Text(
+                        "Waiting for a complete remux before play",
+                        color = Color.White.copy(0.65f),
+                        fontSize = 12.sp,
+                    )
                     if (progressBytes > 0) {
-                        Text("%.1f MB received".format(progressBytes / 1e6), color = Color.White.copy(0.7f), fontSize = 12.sp)
+                        Text(
+                            "%.1f MB received".format(progressBytes / 1e6),
+                            color = Color.White.copy(0.7f),
+                            fontSize = 12.sp,
+                        )
                     }
                 }
-            }
-            if (buffering && uri != null) {
-                Text(
-                    "Streaming… %.1f MB".format(progressBytes / 1e6),
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 72.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0x99000000))
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                )
             }
             val shownError = error ?: playerError
             shownError?.let {
@@ -433,6 +481,102 @@ fun ClipPlayerDialog(
                     .background(Color(0x66000000)),
             ) {
                 Icon(Icons.Default.Close, "Close", tint = Color.White)
+            }
+
+            if (uri != null && !buffering) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 12.dp, end = 64.dp),
+                ) {
+                    IconButton(
+                        onClick = { settingsOpen = true },
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color(0x66000000)),
+                    ) {
+                        Icon(Icons.Default.Settings, "Playback settings", tint = Color.White)
+                    }
+                    DropdownMenu(
+                        expanded = settingsOpen,
+                        onDismissRequest = { settingsOpen = false },
+                        modifier = Modifier
+                            .width(280.dp)
+                            .background(Color(0xFF1F2937)),
+                    ) {
+                        Text(
+                            "Volume",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            IconButton(onClick = { muted = !muted }) {
+                                Icon(
+                                    if (muted || volume <= 0.01f) Icons.AutoMirrored.Filled.VolumeOff
+                                    else Icons.AutoMirrored.Filled.VolumeUp,
+                                    contentDescription = if (muted) "Unmute" else "Mute",
+                                    tint = Color.White,
+                                )
+                            }
+                            Slider(
+                                value = if (muted) 0f else volume,
+                                onValueChange = {
+                                    volume = it
+                                    if (it > 0.01f) muted = false
+                                },
+                                valueRange = 0f..1f,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Text(
+                            "Speed",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                        )
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            IconButton(
+                                onClick = { if (speedIndex > 0) speedIndex-- },
+                                enabled = speedIndex > 0,
+                            ) {
+                                Text("−", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Text(
+                                com.voidnullvalue.icseelocal.video.RobustClipPlayer.formatSpeed(speed),
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                            IconButton(
+                                onClick = { if (speedIndex < speeds.lastIndex) speedIndex++ },
+                                enabled = speedIndex < speeds.lastIndex,
+                            ) {
+                                Text("+", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Text(
+                            "Range −4× … 4× · default 1×",
+                            color = Color.White.copy(0.55f),
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                }
             }
         }
     }

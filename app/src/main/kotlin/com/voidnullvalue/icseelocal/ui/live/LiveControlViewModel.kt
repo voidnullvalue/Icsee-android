@@ -12,6 +12,8 @@ import com.voidnullvalue.icseelocal.app.IcseeApplication
 import com.voidnullvalue.icseelocal.audio.FileAudioSource
 import com.voidnullvalue.icseelocal.audio.MicrophoneSource
 import com.voidnullvalue.icseelocal.audio.TalkController
+import com.voidnullvalue.icseelocal.config.CameraLighting
+import com.voidnullvalue.icseelocal.config.CameraLightingCaps
 import com.voidnullvalue.icseelocal.config.ConfigResult
 import com.voidnullvalue.icseelocal.config.DvripConfigChannel
 import com.voidnullvalue.icseelocal.model.CameraDescriptor
@@ -138,6 +140,12 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     private val _dayNightMode = MutableStateFlow(0) // 0 Auto, 1 Day, 2 Night
     val dayNightMode: StateFlow<Int> = _dayNightMode.asStateFlow()
 
+    private val _lightOn = MutableStateFlow(false)
+    val lightOn: StateFlow<Boolean> = _lightOn.asStateFlow()
+
+    private val _lightingCaps = MutableStateFlow(CameraLightingCaps())
+    val lightingCaps: StateFlow<CameraLightingCaps> = _lightingCaps.asStateFlow()
+
     private val _statusToast = MutableStateFlow<String?>(null)
     val statusToast: StateFlow<String?> = _statusToast.asStateFlow()
 
@@ -212,9 +220,9 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     fun zoomOut() = ptzController?.onPointerDown(PtzCommand.ZOOM_WIDE, _speedStep.value)
     fun zoomStop() = ptzController?.onPointerUp()
 
-    fun setDayNightMode(mode: Int) {
+    fun toggleLight() {
         val manager = sessionManager ?: run {
-            _statusToast.value = "Connect to camera to change day/night"
+            _statusToast.value = "Connect to camera to change lights"
             return
         }
         val transport = manager.controlTransport ?: return
@@ -222,28 +230,37 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
         viewModelScope.launch {
             val config = DvripConfigChannel(transport, channel, sid, getApplication())
-            when (val got = config.getConfig("Camera.ParamEx")) {
-                is ConfigResult.Success -> {
-                    val root = got.value
-                    val patched = patchDayNightMode(root, mode)
-                    if (patched == null) {
-                        _statusToast.value = "Day/night field not found on this camera"
-                        return@launch
-                    }
-                    when (config.setConfig("Camera.ParamEx", patched)) {
-                        is ConfigResult.Success -> {
-                            _dayNightMode.value = mode
-                            _statusToast.value = when (mode) {
-                                1 -> "Day mode"
-                                2 -> "Night mode"
-                                else -> "Auto day/night"
-                            }
-                        }
-                        is ConfigResult.Failure -> _statusToast.value = "Day/night set failed"
-                    }
-                }
-                is ConfigResult.Failure -> _statusToast.value = "Could not load image settings"
+            val param = (config.getConfig("Camera.Param") as? ConfigResult.Success)?.value
+            val paramEx = (config.getConfig("Camera.ParamEx") as? ConfigResult.Success)?.value
+            val caps = CameraLighting.probe(param, paramEx)
+            _lightingCaps.value = caps
+            if (!caps.hasAnyLightControl) {
+                _statusToast.value = "This camera has no light controls (checked WhiteLight, DayNightSwitch, DayNightColor)"
+                return@launch
             }
+            val result = CameraLighting.toggle(param, paramEx)
+            if (result == null) {
+                _statusToast.value = "Could not update light settings"
+                return@launch
+            }
+            when (config.setConfig(result.configName, result.patched)) {
+                is ConfigResult.Success -> {
+                    _lightingCaps.value = result.caps
+                    _lightOn.value = result.caps.whiteLightMode?.equals("Open", ignoreCase = true) == true
+                    result.caps.dayNightMode?.let { _dayNightMode.value = it }
+                    _statusToast.value = result.statusLabel
+                }
+                is ConfigResult.Failure -> _statusToast.value = "Light set failed"
+            }
+        }
+    }
+
+    fun reportLightingCaps() {
+        val caps = _lightingCaps.value
+        _statusToast.value = if (caps.hasAnyLightControl) {
+            "Supported: ${caps.summary}"
+        } else {
+            "No light features detected yet — connect and try Light again"
         }
     }
 
@@ -404,41 +421,6 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
          */
         const val DANCE_MEDIA_URL =
             "https://archive.org/download/Lipps_Inc_Funky_Town/Lipps_Inc_Funky_Town.mp4"
-
-        /** Patch Camera.ParamEx so DayNightSwitch[0].SwitchMode = [mode]. */
-        internal fun patchDayNightMode(root: JsonElement, mode: Int): JsonElement? =
-            when (root) {
-                is JsonArray -> patchParamExArray(root, mode)
-                is JsonObject -> {
-                    // Unusual envelope — try nested array under a single key, else fail.
-                    root.values.firstOrNull { it is JsonArray }?.let { patchDayNightMode(it, mode) }
-                }
-                else -> null
-            }
-
-        private fun patchParamExArray(arr: JsonArray, mode: Int): JsonElement? {
-            if (arr.isEmpty()) return null
-            val first = arr[0] as? JsonObject ?: return null
-            val dns = first["DayNightSwitch"] as? JsonArray ?: return null
-            if (dns.isEmpty()) return null
-            val dns0 = dns[0] as? JsonObject ?: return null
-            val newDns0 = buildJsonObject {
-                dns0.forEach { (k, v) -> put(k, v) }
-                put("SwitchMode", mode)
-            }
-            val newDns = buildJsonArray {
-                add(newDns0)
-                for (i in 1 until dns.size) add(dns[i])
-            }
-            val newFirst = buildJsonObject {
-                first.forEach { (k, v) -> if (k != "DayNightSwitch") put(k, v) }
-                put("DayNightSwitch", newDns)
-            }
-            return buildJsonArray {
-                add(newFirst)
-                for (i in 1 until arr.size) add(arr[i])
-            }
-        }
     }
 
     init {
@@ -590,6 +572,20 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         }
         talkController = TalkController(found.host, found.dvripPort, state.sessionId, microphone, seq, channel)
         wiredSessionId = state.sessionId
+        val transport = sessionManager?.controlTransport ?: return
+        probeLighting(channel, transport, state.sessionId)
+    }
+
+    private fun probeLighting(channel: com.voidnullvalue.icseelocal.session.DvripCommandChannel, transport: com.voidnullvalue.icseelocal.dvrip.DvripTransport, sid: UInt) {
+        viewModelScope.launch {
+            val config = DvripConfigChannel(transport, channel, sid, getApplication())
+            val param = (config.getConfig("Camera.Param") as? ConfigResult.Success)?.value
+            val paramEx = (config.getConfig("Camera.ParamEx") as? ConfigResult.Success)?.value
+            val caps = CameraLighting.probe(param, paramEx)
+            _lightingCaps.value = caps
+            _lightOn.value = caps.whiteLightMode?.equals("Open", ignoreCase = true) == true
+            caps.dayNightMode?.let { _dayNightMode.value = it }
+        }
     }
 
     fun reconnect() {

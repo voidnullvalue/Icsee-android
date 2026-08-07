@@ -2,6 +2,8 @@ package com.voidnullvalue.icseelocal.video
 
 import android.content.Context
 import android.net.Uri
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -39,7 +41,7 @@ class RtspVideoPlayer(context: Context) {
     private val _state = MutableStateFlow<RtspPlayerState>(RtspPlayerState.Idle)
     val state: StateFlow<RtspPlayerState> = _state.asStateFlow()
 
-    private val _muted = MutableStateFlow(true)
+    private val _muted = MutableStateFlow(false)
     val muted: StateFlow<Boolean> = _muted.asStateFlow()
 
     /** Estimated stream bitrate in bits/sec (0 when unknown). */
@@ -52,7 +54,16 @@ class RtspVideoPlayer(context: Context) {
         .setEnableDecoderFallback(true)
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context, renderersFactory).build().apply {
-        volume = 0f // muted by default — user unmutes from live chrome
+        // Audible by default — G.711/PCMA on this camera is quiet unless volume
+        // and audio focus are set correctly.
+        volume = 1f
+        setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                .build(),
+            /* handleAudioFocus = */ true,
+        )
         addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY && isPlaying) {
@@ -95,6 +106,12 @@ class RtspVideoPlayer(context: Context) {
     fun setMuted(mute: Boolean) {
         _muted.value = mute
         exoPlayer.volume = if (mute) 0f else 1f
+    }
+
+    fun setVolume(level: Float) {
+        val v = level.coerceIn(0f, 1f)
+        if (v > 0.01f) _muted.value = false
+        exoPlayer.volume = if (_muted.value) 0f else v
     }
 
     fun toggleMute() = setMuted(!_muted.value)
@@ -165,6 +182,8 @@ class RtspVideoPlayer(context: Context) {
         exoPlayer.setMediaSource(mediaSource)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
+        // Re-assert volume after source swap (some devices reset it).
+        if (!_muted.value) exoPlayer.volume = 1f
     }
 
     /**

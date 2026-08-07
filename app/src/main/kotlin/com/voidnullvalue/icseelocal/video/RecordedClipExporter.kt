@@ -126,9 +126,15 @@ class RecordedClipExporter(
         }
 
     /** Downloads [fileName] and writes a playable MP4 to [outFile]; returns it. */
-    suspend fun exportToMp4(fileName: String, begin: String, end: String, outFile: File, onProgress: (Long) -> Unit = {}): File {
+    suspend fun exportToMp4(
+        fileName: String,
+        begin: String,
+        end: String,
+        outFile: File,
+        onProgress: (Long) -> Unit = {},
+    ): File {
         val raw = download(fileName, begin, end, onProgress)
-        XmHevcMuxer.writeMp4(raw, outFile)
+        XmHevcMuxer.writeMp4(raw, outFile, durationUs = clipDurationUs(begin, end))
         return outFile
     }
 
@@ -141,10 +147,9 @@ class RecordedClipExporter(
     }
 
     /**
-     * Streams a clip for in-app playback (cache only — not gallery).
-     * Remuxes as soon as enough of the HEVC stream is parseable and invokes
-     * [onEarlyMp4] so the player can start while the rest is still arriving.
-     * Returns the final full remux when the camera finishes sending.
+     * Downloads the full clip into cache, remuxes once, then returns the MP4.
+     * Timestamps are stretched to the clip's real [begin]–[end] duration so 1×
+     * playback matches wall-clock speed (fixed FPS was often too fast).
      */
     suspend fun streamForPlayback(
         fileName: String,
@@ -152,12 +157,9 @@ class RecordedClipExporter(
         end: String,
         cacheDir: File,
         onProgress: (Long) -> Unit = {},
-        onEarlyMp4: (File) -> Unit = {},
     ): File = coroutineScope {
         cacheDir.mkdirs()
         val collected = ByteArrayOutputStream()
-        var earlySent = false
-        var nextTryAt = EARLY_PLAY_MIN_BYTES
         val job = async(start = CoroutineStart.UNDISPATCHED) {
             var lastReport = 0L
             transport.incomingFrames
@@ -177,21 +179,6 @@ class RecordedClipExporter(
                         onProgress(size)
                         lastReport = now
                     }
-                    if (!earlySent && size >= nextTryAt) {
-                        val snap = collected.toByteArray()
-                        val early = File(cacheDir, "play_early_${System.currentTimeMillis()}.mp4")
-                        val ok = runCatching {
-                            XmHevcMuxer.writeMp4(snap, early)
-                            early.length() > 0
-                        }.getOrDefault(false)
-                        if (ok) {
-                            earlySent = true
-                            onEarlyMp4(early)
-                        } else {
-                            runCatching { early.delete() }
-                            nextTryAt = size + EARLY_PLAY_RETRY_BYTES
-                        }
-                    }
                 }
             onProgress(collected.size().toLong())
             collected.toByteArray()
@@ -205,9 +192,8 @@ class RecordedClipExporter(
         }
         require(raw.isNotEmpty()) { "empty stream for playback" }
         val finalFile = File(cacheDir, "play_full_${System.currentTimeMillis()}.mp4")
-        XmHevcMuxer.writeMp4(raw, finalFile)
+        XmHevcMuxer.writeMp4(raw, finalFile, durationUs = clipDurationUs(begin, end))
         require(finalFile.exists() && finalFile.length() > 0) { "remux produced empty file" }
-        if (!earlySent) onEarlyMp4(finalFile)
         finalFile
     }
 
@@ -219,10 +205,21 @@ class RecordedClipExporter(
         private const val THUMB_TIMEOUT_MS = 25_000L
         /** ~first GOP; enough for SPS + IDR on typical XM clips. */
         const val THUMB_PREFIX_BYTES = 768_000L
-        /** First attempt at an early playable remux (needs SPS + IDR). */
-        const val EARLY_PLAY_MIN_BYTES = 600_000L
-        /** Retry interval when early remux fails (SPS/IDR not yet present). */
-        const val EARLY_PLAY_RETRY_BYTES = 350_000L
+
+        private val XM_TIME: java.time.format.DateTimeFormatter =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+        /** Wall-clock duration of a clip from OPFileQuery Begin/EndTime strings. */
+        fun clipDurationUs(begin: String, end: String): Long? {
+            return try {
+                val b = java.time.LocalDateTime.parse(begin.trim(), XM_TIME)
+                val e = java.time.LocalDateTime.parse(end.trim(), XM_TIME)
+                val ms = java.time.Duration.between(b, e).toMillis()
+                if (ms in 1_000..86_400_000) ms * 1_000L else null
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
 }
 

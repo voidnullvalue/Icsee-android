@@ -20,11 +20,13 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -53,6 +56,7 @@ import androidx.compose.material.icons.filled.East
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Hd
 import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
@@ -62,6 +66,7 @@ import androidx.compose.material.icons.filled.NorthWest
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.South
@@ -169,7 +174,8 @@ fun LiveControlScreen(
     val muted by viewModel.muted.collectAsState()
     val bitrateBps by viewModel.bitrateBps.collectAsState()
     val cruiseActive by viewModel.cruiseActive.collectAsState()
-    val dayNightMode by viewModel.dayNightMode.collectAsState()
+    val lightOn by viewModel.lightOn.collectAsState()
+    val lightingCaps by viewModel.lightingCaps.collectAsState()
     val statusToast by viewModel.statusToast.collectAsState()
     val recording by viewModel.recording.collectAsState()
     val recordElapsedMs by viewModel.recordElapsedMs.collectAsState()
@@ -303,24 +309,71 @@ fun LiveControlScreen(
             .background(Color.Black)
             .navigationBarsPadding(),
     ) {
-        // —— Video + light chrome ——
+        // Top chrome sits *above* the stream (not overlaid) except in fullscreen.
+        if (!fullscreen) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0B0F14))
+                    .statusBarsPadding()
+                    .padding(horizontal = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(camera?.displayName ?: "Live", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, fontSize = 15.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        StatusPill(state, rtspState is RtspPlayerState.Playing)
+                        if (bitrateBps > 0) {
+                            Text(formatBitrate(bitrateBps), color = Color.White.copy(0.7f), fontSize = 11.sp)
+                        }
+                        if (recording) {
+                            Text("REC ${formatDuration(recordElapsedMs)}", color = Color(0xFFFF6B6B), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, "More", tint = Color.White)
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(text = { Text("Device management") }, onClick = { menuOpen = false; onOpenDeviceManagement() }, leadingIcon = { Icon(Icons.Default.Settings, null) })
+                        DropdownMenuItem(text = { Text("Image settings") }, onClick = { menuOpen = false; onOpenImageSettings() }, leadingIcon = { Icon(Icons.Default.LightMode, null) })
+                        DropdownMenuItem(text = { Text("Motion detection") }, onClick = { menuOpen = false; onOpenMotionDetect() }, leadingIcon = { Icon(Icons.Default.Sensors, null) })
+                        DropdownMenuItem(text = { Text("Diagnostics") }, onClick = { menuOpen = false; onOpenDiagnostics() }, leadingIcon = { Icon(Icons.Default.Refresh, null) })
+                        DropdownMenuItem(text = { Text("Light features…") }, onClick = { menuOpen = false; viewModel.reportLightingCaps() }, leadingIcon = { Icon(Icons.Default.Info, null) })
+                    }
+                }
+            }
+            statusToast?.let { msg ->
+                Text(
+                    msg,
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF1A2330))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+
+        // —— Video only (no overlapping controls in normal mode) ——
         Box(
             Modifier
                 .fillMaxWidth()
                 .weight(if (fullscreen) 1f else 0.42f)
-                .clip(if (fullscreen) RoundedCornerShape(0.dp) else RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)),
+                .clip(if (fullscreen) RoundedCornerShape(0.dp) else RoundedCornerShape(0.dp)),
         ) {
             Box(
                 Modifier
                     .fillMaxSize()
                     .clipToBounds()
                     .onSizeChanged { viewportSize = it }
-                    // Gestures on untransformed coords; visual scale applied after.
-                    // Key must stay stable (not [scale]) or the pinch restarts mid-gesture.
                     .pointerInput(fullscreen) {
-                        detectTransformGestures(
-                            panZoomLock = true,
-                        ) { centroid, pan, zoom, _ ->
+                        detectTransformGestures(panZoomLock = true) { centroid, pan, zoom, _ ->
                             val oldScale = scale
                             val newScale = (oldScale * zoom).coerceIn(1f, 5f)
                             if (newScale <= 1.01f) {
@@ -328,8 +381,6 @@ fun LiveControlScreen(
                                 offset = Offset.Zero
                                 return@detectTransformGestures
                             }
-                            // Zoom about the pinch midpoint so the content under
-                            // the fingers stays put (center-origin graphicsLayer).
                             val cx = size.width / 2f
                             val cy = size.height / 2f
                             val focus = Offset(centroid.x - cx, centroid.y - cy)
@@ -338,7 +389,6 @@ fun LiveControlScreen(
                                 offset.x * ratio + focus.x * (1f - ratio),
                                 offset.y * ratio + focus.y * (1f - ratio),
                             )
-                            // Pan tracks the finger 1:1 in screen space.
                             scale = newScale
                             offset = clampPan(zoomed + pan, newScale)
                             if (fullscreen) fsChromeVisible = true
@@ -346,9 +396,7 @@ fun LiveControlScreen(
                     }
                     .pointerInput(fullscreen) {
                         if (fullscreen) {
-                            detectTapGestures {
-                                fsChromeVisible = !fsChromeVisible
-                            }
+                            detectTapGestures { fsChromeVisible = !fsChromeVisible }
                         }
                     }
                     .graphicsLayer {
@@ -361,133 +409,56 @@ fun LiveControlScreen(
                 VideoSurface(viewModel, rtspState, Modifier.fillMaxSize())
             }
 
-            val showChrome = !fullscreen || fsChromeVisible
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showChrome,
-                enter = androidx.compose.animation.fadeIn(),
-                exit = androidx.compose.animation.fadeOut(),
-                modifier = Modifier.align(Alignment.TopCenter),
-            ) {
-                // Top bar
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(horizontal = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            // Fullscreen-only chrome (tap to show/hide) so landscape exit still works.
+            if (fullscreen) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = fsChromeVisible,
+                    enter = androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.fadeOut(),
+                    modifier = Modifier.align(Alignment.TopStart),
                 ) {
-                    IconButton(onClick = {
-                        if (fullscreen) { resetZoom(); fullscreen = false } else onBack()
-                    }) {
-                        Icon(
-                            if (fullscreen) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = Color.White,
-                        )
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(camera?.displayName ?: "Live", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, fontSize = 15.sp)
-                        StatusPill(state, rtspState is RtspPlayerState.Playing)
-                    }
-                    if (!fullscreen) {
-                        Box {
-                            IconButton(onClick = { menuOpen = true }) {
-                                Icon(Icons.Default.MoreVert, "More", tint = Color.White)
-                            }
-                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                DropdownMenuItem(text = { Text("Device management") }, onClick = { menuOpen = false; onOpenDeviceManagement() }, leadingIcon = { Icon(Icons.Default.Settings, null) })
-                                DropdownMenuItem(text = { Text("Image settings") }, onClick = { menuOpen = false; onOpenImageSettings() }, leadingIcon = { Icon(Icons.Default.LightMode, null) })
-                                DropdownMenuItem(text = { Text("Motion detection") }, onClick = { menuOpen = false; onOpenMotionDetect() }, leadingIcon = { Icon(Icons.Default.Sensors, null) })
-                                DropdownMenuItem(text = { Text("Diagnostics") }, onClick = { menuOpen = false; onOpenDiagnostics() }, leadingIcon = { Icon(Icons.Default.Refresh, null) })
-                            }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = { resetZoom(); fullscreen = false }) {
+                            Icon(Icons.Default.Close, "Exit fullscreen", tint = Color.White)
+                        }
+                        Text(camera?.displayName ?: "Live", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.weight(1f))
+                        if (recording) {
+                            Text("REC ${formatDuration(recordElapsedMs)}", color = Color(0xFFFF6B6B), fontWeight = FontWeight.Bold)
                         }
                     }
                 }
-            }
-
-            if (showChrome && bitrateBps > 0) {
-                Text(
-                    formatBitrate(bitrateBps),
-                    color = Color.White.copy(0.9f),
-                    fontSize = 11.sp,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .statusBarsPadding()
-                        .padding(start = 56.dp, top = 40.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(OverlayBg)
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                )
-            }
-            if (recording) {
-                Text(
-                    "REC ${formatDuration(recordElapsedMs)}",
-                    color = Color(0xFFFF6B6B),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .statusBarsPadding()
-                        .padding(end = 12.dp, top = 40.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(OverlayBg)
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                )
-            }
-            // Digital zoom controls on the video edge
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showChrome,
-                enter = androidx.compose.animation.fadeIn(),
-                exit = androidx.compose.animation.fadeOut(),
-                modifier = Modifier.align(Alignment.CenterEnd),
-            ) {
-                Column(
-                    Modifier.padding(end = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    SmallOverlayBtn(Icons.Default.ZoomIn, "Zoom in") {
-                        fsChromeVisible = true
-                        bumpZoom(1.25f)
-                    }
-                    SmallOverlayBtn(Icons.Default.ZoomOut, "Zoom out") {
-                        fsChromeVisible = true
-                        bumpZoom(0.8f)
-                    }
-                    if (scale > 1.01f) {
-                        SmallOverlayBtn(Icons.Default.Close, "Reset zoom") {
-                            fsChromeVisible = true
-                            resetZoom()
-                        }
-                    }
-                    if (!fullscreen) {
-                        SmallOverlayBtn(Icons.Default.Fullscreen, "Fullscreen") { fullscreen = true }
-                    }
+                statusToast?.let { msg ->
+                    Text(
+                        msg,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 16.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(OverlayBg)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
                 }
-            }
-
-            statusToast?.let { msg ->
-                Text(
-                    msg,
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 8.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(OverlayBg)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                )
             }
         }
 
         if (!fullscreen) {
-            // —— Action row directly under stream ——
+            // —— Action row directly under stream (zoom / fullscreen live here) ——
             StreamActionRow(
                 mainStream = camera?.streamType != StreamType.SUB,
                 muted = muted,
                 recording = recording,
                 talking = talking,
                 hasMicPermission = hasMicPermission,
+                canResetZoom = scale > 1.01f,
                 onToggleQuality = {
                     viewModel.setStreamType(
                         if (camera?.streamType == StreamType.MAIN) StreamType.SUB else StreamType.MAIN,
@@ -501,6 +472,10 @@ fun LiveControlScreen(
                     else viewModel.startTalk()
                 },
                 onTalkRelease = viewModel::stopTalk,
+                onZoomIn = { bumpZoom(1.25f) },
+                onZoomOut = { bumpZoom(0.8f) },
+                onResetZoom = { resetZoom() },
+                onFullscreen = { fullscreen = true },
             )
 
             // —— Tabs: Controls | Recordings | Saved ——
@@ -537,7 +512,9 @@ fun LiveControlScreen(
                         talkError = talkError,
                         speed = speed,
                         cruiseActive = cruiseActive,
-                        dayNightMode = dayNightMode,
+                        lightOn = lightOn,
+                        lightingSupported = lightingCaps.hasAnyLightControl,
+                        lightingSummary = lightingCaps.summary,
                         presetThumbs = presetThumbs,
                         presetThumbEpoch = presetThumbEpoch,
                         onReconnect = viewModel::reconnect,
@@ -548,10 +525,8 @@ fun LiveControlScreen(
                         onSavePreset = viewModel::setPreset,
                         onSpeed = viewModel::setSpeedStep,
                         onToggleCruise = viewModel::toggleCruise,
-                        onCycleDayNight = {
-                            val next = when (dayNightMode) { 0 -> 1; 1 -> 2; else -> 0 }
-                            viewModel.setDayNightMode(next)
-                        },
+                        onToggleLight = viewModel::toggleLight,
+                        onLongPressLight = viewModel::reportLightingCaps,
                     )
                     LiveBottomTab.Recordings -> LiveRecordingsPanel(
                         querying = dmState.recordingsQuerying,
@@ -622,16 +597,22 @@ private fun StreamActionRow(
     recording: Boolean,
     talking: Boolean,
     hasMicPermission: Boolean,
+    canResetZoom: Boolean,
     onToggleQuality: () -> Unit,
     onToggleMute: () -> Unit,
     onSnapshot: () -> Unit,
     onToggleRecording: () -> Unit,
     onTalkPress: () -> Unit,
     onTalkRelease: () -> Unit,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
+    onResetZoom: () -> Unit,
+    onFullscreen: () -> Unit,
 ) {
     Row(
         Modifier
             .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -649,14 +630,19 @@ private fun StreamActionRow(
             onToggleRecording,
             tint = if (recording) Color(0xFFFF6B6B) else MaterialTheme.colorScheme.onSurface,
         )
-        // Hold-to-talk fills remaining width
+        ActionIcon(Icons.Default.ZoomIn, onZoomIn)
+        ActionIcon(Icons.Default.ZoomOut, onZoomOut)
+        if (canResetZoom) {
+            ActionIcon(Icons.Default.RestartAlt, onResetZoom)
+        }
+        ActionIcon(Icons.Default.Fullscreen, onFullscreen)
         val talkBg by animateColorAsState(
             if (talking) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
             label = "talk",
         )
         Row(
             Modifier
-                .weight(1f)
+                .widthIn(min = 120.dp)
                 .height(40.dp)
                 .clip(RoundedCornerShape(20.dp))
                 .background(talkBg)
@@ -667,7 +653,8 @@ private fun StreamActionRow(
                         waitForUpOrCancellation()
                         onTalkRelease()
                     }
-                },
+                }
+                .padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -678,13 +665,16 @@ private fun StreamActionRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ControlsPanel(
     state: ConnectionState,
     talkError: String?,
     speed: Int,
     cruiseActive: Boolean,
-    dayNightMode: Int,
+    lightOn: Boolean,
+    lightingSupported: Boolean,
+    lightingSummary: String,
     presetThumbs: Map<Int, String>,
     presetThumbEpoch: Long,
     onReconnect: () -> Unit,
@@ -695,14 +685,14 @@ private fun ControlsPanel(
     onSavePreset: (Int) -> Unit,
     onSpeed: (Int) -> Unit,
     onToggleCruise: () -> Unit,
-    onCycleDayNight: () -> Unit,
+    onToggleLight: () -> Unit,
+    onLongPressLight: () -> Unit,
 ) {
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (state is ConnectionState.Failed || state is ConnectionState.Disconnected) {
@@ -725,33 +715,50 @@ private fun ControlsPanel(
         }
         talkError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
 
-        CompactPtzPad(onPtzDown, onPtzUp, onPtzCancel)
-
-        // Presets + extras on one row
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CompactPresets(presetThumbs, presetThumbEpoch, onGotoPreset, onSavePreset)
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            CompactPtzPad(onPtzDown, onPtzUp, onPtzCancel, Modifier.weight(1f, fill = false))
+            CompactPresets(presetThumbs, presetThumbEpoch, onGotoPreset, onSavePreset, Modifier.weight(1f))
+        }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MiniToggle(
+                icon = Icons.Default.Repeat,
+                active = cruiseActive,
+                label = "Cruise",
+                onClick = onToggleCruise,
+            )
+            Box(
+                Modifier.combinedClickable(
+                    onClick = onToggleLight,
+                    onLongClick = onLongPressLight,
+                ),
+            ) {
                 MiniToggle(
-                    icon = Icons.Default.Repeat,
-                    active = cruiseActive,
-                    label = "Cruise",
-                    onClick = onToggleCruise,
-                )
-                MiniToggle(
-                    icon = when (dayNightMode) {
-                        1 -> Icons.Default.LightMode
-                        2 -> Icons.Default.DarkMode
-                        else -> Icons.Default.BrightnessAuto
+                    icon = if (lightOn) Icons.Default.LightMode else Icons.Default.DarkMode,
+                    active = lightOn || lightingSupported,
+                    label = when {
+                        !lightingSupported -> "Light?"
+                        lightOn -> "Light on"
+                        else -> "Light"
                     },
-                    active = dayNightMode != 0,
-                    label = "Light",
-                    onClick = onCycleDayNight,
+                    onClick = onToggleLight,
                 )
             }
+            Text(
+                lightingSummary,
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+            )
         }
 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -773,77 +780,104 @@ private fun CompactPtzPad(
     onDown: (PtzCommand) -> Unit,
     onUp: () -> Unit,
     onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            PtzPadButton(Icons.Default.NorthWest, "Up-left", { onDown(PtzCommand.DIRECTION_LEFT_UP) }, onUp, onCancel)
-            PtzPadButton(Icons.Default.North, "Up", { onDown(PtzCommand.DIRECTION_UP) }, onUp, onCancel)
-            PtzPadButton(Icons.Default.NorthEast, "Up-right", { onDown(PtzCommand.DIRECTION_RIGHT_UP) }, onUp, onCancel)
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PtzPadButton(Icons.Default.NorthWest, "Up-left", { onDown(PtzCommand.DIRECTION_LEFT_UP) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
+            PtzPadButton(Icons.Default.North, "Up", { onDown(PtzCommand.DIRECTION_UP) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
+            PtzPadButton(Icons.Default.NorthEast, "Up-right", { onDown(PtzCommand.DIRECTION_RIGHT_UP) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            PtzPadButton(Icons.Default.West, "Left", { onDown(PtzCommand.DIRECTION_LEFT) }, onUp, onCancel)
-            PtzPadButton(Icons.Default.Stop, "Stop", onUp, onUp, onUp)
-            PtzPadButton(Icons.Default.East, "Right", { onDown(PtzCommand.DIRECTION_RIGHT) }, onUp, onCancel)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PtzPadButton(Icons.Default.West, "Left", { onDown(PtzCommand.DIRECTION_LEFT) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
+            PtzPadButton(Icons.Default.Stop, "Stop", onUp, onUp, onUp, sizeDp = 56, iconDp = 28)
+            PtzPadButton(Icons.Default.East, "Right", { onDown(PtzCommand.DIRECTION_RIGHT) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            PtzPadButton(Icons.Default.SouthWest, "Down-left", { onDown(PtzCommand.DIRECTION_LEFT_DOWN) }, onUp, onCancel)
-            PtzPadButton(Icons.Default.South, "Down", { onDown(PtzCommand.DIRECTION_DOWN) }, onUp, onCancel)
-            PtzPadButton(Icons.Default.SouthEast, "Down-right", { onDown(PtzCommand.DIRECTION_RIGHT_DOWN) }, onUp, onCancel)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PtzPadButton(Icons.Default.SouthWest, "Down-left", { onDown(PtzCommand.DIRECTION_LEFT_DOWN) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
+            PtzPadButton(Icons.Default.South, "Down", { onDown(PtzCommand.DIRECTION_DOWN) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
+            PtzPadButton(Icons.Default.SouthEast, "Down-right", { onDown(PtzCommand.DIRECTION_RIGHT_DOWN) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
         }
     }
 }
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CompactPresets(
     thumbs: Map<Int, String>,
     thumbEpoch: Long,
     onGoto: (Int) -> Unit,
     onSave: (Int) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        (1..4).forEach { n ->
-            val path = thumbs[n]
-            val bmp = remember(path, thumbEpoch) {
-                path?.let { p ->
-                    val f = File(p)
-                    if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
-                }
-            }
-            Box(
-                Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF1A1F26))
-                    .combinedClickable(
-                        onClick = { onGoto(n) },
-                        onLongClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onSave(n)
-                        },
-                    ),
-                contentAlignment = Alignment.Center,
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(1 to 2, 3 to 4).forEach { (a, b) ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (bmp != null) {
-                    Image(
-                        bitmap = bmp,
-                        contentDescription = "Favourite $n",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Image(
-                        painter = androidx.compose.ui.res.painterResource(
-                            id = com.voidnullvalue.icseelocal.R.drawable.ic_preset_placeholder,
-                        ),
-                        contentDescription = "Empty favourite $n — long-press to save",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
+                listOf(a, b).forEach { n ->
+                    val path = thumbs[n]
+                    val bmp = remember(path, thumbEpoch) {
+                        path?.let { p ->
+                            val f = File(p)
+                            if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
+                        }
+                    }
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF1A1F26))
+                            .combinedClickable(
+                                onClick = { onGoto(n) },
+                                onLongClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onSave(n)
+                                },
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (bmp != null) {
+                            Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                        } else {
+                            Image(
+                                painter = androidx.compose.ui.res.painterResource(
+                                    id = com.voidnullvalue.icseelocal.R.drawable.ic_preset_placeholder,
+                                ),
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop,
+                            )
+                        }
+                        Text(
+                            "$n",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(6.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0x99000000))
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                        )
+                    }
                 }
             }
         }
+        Text(
+            "Tap go · hold save",
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
     }
 }
 

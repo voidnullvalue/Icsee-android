@@ -2,82 +2,96 @@ package com.voidnullvalue.icseelocal.video
 
 import android.content.Context
 import android.net.Uri
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * ExoPlayer tuned for our remuxed SD-card clips (often high-res HEVC that HW
- * decoders paint green / corrupt). Prefers software decoders and enables
- * fallback when the primary codec fails.
+ * ExoPlayer for remuxed SD-card clips.
+ *
+ * Speeds are signed: negative values scrub reverse (ExoPlayer has no native
+ * reverse rate). Default is **1×** forward. Volume defaults to full (1f).
  */
 @UnstableApi
 object RobustClipPlayer {
-    fun create(context: Context, onError: (String) -> Unit = {}): ExoPlayer {
-        val renderers = DefaultRenderersFactory(context)
+    /**
+     * −4× … −0.5× (reverse scrub) then 1× … 4× forward.
+     * Index of 1× is [DEFAULT_SPEED_INDEX].
+     */
+    val SPEED_STEPS = floatArrayOf(-4f, -3f, -2f, -1f, -0.5f, 1f, 1.5f, 2f, 3f, 4f)
+    const val DEFAULT_SPEED_INDEX = 5 // 1×
+
+    fun create(
+        context: Context,
+        pendingStart: AtomicBoolean = AtomicBoolean(false),
+        onError: (String) -> Unit = {},
+    ): ExoPlayer {
+        val appContext = context.applicationContext
+        val renderers = DefaultRenderersFactory(appContext)
             .setEnableDecoderFallback(true)
-            .setMediaCodecSelector(softwarePreferSelector())
 
-        val trackSelector = DefaultTrackSelector(context).apply {
-            parameters = buildUponParameters()
-                .setAllowVideoMixedMimeTypeAdaptiveness(true)
-                .setExceedVideoConstraintsIfNecessary(true)
-                .setExceedRendererCapabilitiesIfNecessary(true)
-                .build()
-        }
-
-        return ExoPlayer.Builder(context, renderers)
-            .setTrackSelector(trackSelector)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(context))
+        return ExoPlayer.Builder(appContext, renderers)
             .build()
             .apply {
-                playWhenReady = true
-                // Avoid seamless gaps that can leave a stale green frame on screen.
-                videoScalingMode = androidx.media3.common.C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+                playWhenReady = false
+                volume = 1f
+                setPlaybackSpeed(1f)
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    /* handleAudioFocus = */ true,
+                )
                 addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
+                        pendingStart.set(false)
                         onError(error.message ?: "Player error ${error.errorCode}")
+                    }
+
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (playbackState == Player.STATE_READY && pendingStart.compareAndSet(true, false)) {
+                            playWhenReady = true
+                        }
                     }
                 })
             }
     }
 
-    fun play(player: ExoPlayer, uri: String) {
-        val media = MediaItem.Builder()
-            .setUri(Uri.parse(uri))
-            .setMimeType(guessMime(uri))
-            .build()
-        player.setMediaItem(media, /* resetPosition = */ true)
+    fun play(player: ExoPlayer, uri: String, pendingStart: AtomicBoolean) {
+        pendingStart.set(true)
+        player.playWhenReady = false
+        player.setPlaybackSpeed(1f)
+        player.volume = player.volume.coerceIn(0f, 1f).let { if (it <= 0f) 1f else it }
+        player.setMediaItem(MediaItem.fromUri(Uri.parse(uri)), /* resetPosition = */ true)
         player.prepare()
-        player.playWhenReady = true
     }
 
-    private fun guessMime(uri: String): String? = when {
-        uri.contains(".mp4", ignoreCase = true) -> "video/mp4"
-        uri.contains(".h264", ignoreCase = true) -> "video/avc"
-        uri.contains(".h265", ignoreCase = true) || uri.contains(".hevc", ignoreCase = true) -> "video/hevc"
-        else -> null
-    }
-
-    /** Sort codec infos so software / Google decoders come first. */
-    private fun softwarePreferSelector(): MediaCodecSelector =
-        MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-            val infos = MediaCodecSelector.DEFAULT.getDecoderInfos(
-                mimeType, requiresSecureDecoder, requiresTunnelingDecoder,
-            )
-            infos.sortedBy { info ->
-                when {
-                    info.name.contains("c2.android", ignoreCase = true) -> 0
-                    info.name.contains("OMX.google", ignoreCase = true) -> 1
-                    info.softwareOnly -> 2
-                    else -> 3
-                }
-            }
+    /** Applies forward ExoPlayer rate. Reverse is handled by the UI scrub loop. */
+    fun applyForwardSpeed(player: ExoPlayer, speed: Float) {
+        require(speed > 0f)
+        player.setPlaybackSpeed(speed.coerceIn(0.25f, 4f))
+        if (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING) {
+            player.playWhenReady = true
         }
+    }
+
+    fun formatSpeed(speed: Float): String = when {
+        speed == 1f -> "1×"
+        speed == -0.5f -> "−½×"
+        speed == 0.5f -> "½×"
+        speed == 1.5f -> "1.5×"
+        speed == speed.toInt().toFloat() -> {
+            val n = speed.toInt()
+            if (n < 0) "−${-n}×" else "${n}×"
+        }
+        speed < 0f -> "−${"%.1f".format(-speed)}×"
+        else -> "${"%.1f".format(speed)}×"
+    }
 }

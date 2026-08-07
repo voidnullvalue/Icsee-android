@@ -76,7 +76,8 @@ fun ImageSettingsScreen(
                     ModePicker(
                         "Mode",
                         listOf(0 to "Auto", 1 to "Day", 2 to "Night", 3 to "Scheduled"),
-                        px.at(0, "DayNightSwitch", "SwitchMode"),
+                        px.at(0, "DayNightSwitch", 0, "SwitchMode")
+                            ?: px.at(0, "DayNightSwitch", "SwitchMode"),
                     )
                     IntSwitch("Night enhancement", "Extra brightening of the night image.", px.at(0, "NightEnhance"))
                     IntSwitch("Low-light mode", "Slower shutter for a brighter picture in very low light.", px.at(0, "LowLuxMode"))
