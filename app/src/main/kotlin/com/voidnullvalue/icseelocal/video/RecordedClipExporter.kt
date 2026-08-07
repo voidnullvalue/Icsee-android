@@ -59,6 +59,26 @@ class RecordedClipExporter(
 
     /** Downloads the raw XM-framed clip bytes into memory. */
     suspend fun download(fileName: String, begin: String, end: String, onProgress: (Long) -> Unit = {}): ByteArray =
+        downloadInternal(fileName, begin, end, maxBytes = Long.MAX_VALUE, onProgress)
+
+    /**
+     * Pulls only the start of a clip (enough for VPS/SPS/PPS + first IDR) so we
+     * can build a thumbnail without waiting for a full multi-MB download.
+     */
+    suspend fun downloadPrefix(
+        fileName: String,
+        begin: String,
+        end: String,
+        maxBytes: Long = THUMB_PREFIX_BYTES,
+    ): ByteArray = downloadInternal(fileName, begin, end, maxBytes = maxBytes)
+
+    private suspend fun downloadInternal(
+        fileName: String,
+        begin: String,
+        end: String,
+        maxBytes: Long,
+        onProgress: (Long) -> Unit = {},
+    ): ByteArray =
         coroutineScope {
             val collected = ByteArrayOutputStream()
             // Subscribe BEFORE sending so no data frame is missed (same
@@ -69,7 +89,9 @@ class RecordedClipExporter(
                 // non-JSON body until a zero-length frame. Filtering only mid=1426
                 // misses firmwares that deliver the file on a neighbouring mid.
                 transport.incomingFrames
-                    .takeWhile { it.header.payloadLength > 0 }
+                    .takeWhile { frame ->
+                        frame.header.payloadLength > 0 && collected.size() < maxBytes
+                    }
                     .filter { frame ->
                         val p = frame.payload
                         if (p.isEmpty()) return@filter false
@@ -90,8 +112,16 @@ class RecordedClipExporter(
             }
             commandChannel.sendJson(PB_CLAIM, body("Claim", fileName, begin, end))
             commandChannel.sendJson(PB_CTRL, body("DownloadStart", fileName, begin, end))
-            val raw = withTimeout(DOWNLOAD_TIMEOUT_MS) { job.await() }
-            runCatching { commandChannel.sendJson(PB_CTRL, body("DownloadStop", fileName, begin, end)) }
+            val timeout = if (maxBytes < Long.MAX_VALUE) THUMB_TIMEOUT_MS else DOWNLOAD_TIMEOUT_MS
+            val raw = try {
+                withTimeout(timeout) { job.await() }
+            } finally {
+                runCatching { commandChannel.sendJson(PB_CTRL, body("DownloadStop", fileName, begin, end)) }
+                // Prefix mode cancels the collector mid-stream; let the camera settle.
+                if (maxBytes < Long.MAX_VALUE) {
+                    job.cancel()
+                }
+            }
             raw
         }
 
@@ -102,11 +132,22 @@ class RecordedClipExporter(
         return outFile
     }
 
+    /** Downloads a short prefix and remuxes a tiny MP4 suitable for a first-frame thumb. */
+    suspend fun exportThumbMp4(fileName: String, begin: String, end: String, outFile: File): File {
+        val raw = downloadPrefix(fileName, begin, end)
+        require(raw.isNotEmpty()) { "empty prefix for thumbnail" }
+        XmHevcMuxer.writeMp4(raw, outFile)
+        return outFile
+    }
+
     companion object {
         const val PB_CLAIM = 1424
         const val PB_CTRL = 1420
         const val PB_DATA = 1426
         private const val DOWNLOAD_TIMEOUT_MS = 180_000L
+        private const val THUMB_TIMEOUT_MS = 25_000L
+        /** ~first GOP; enough for SPS + IDR on typical XM clips. */
+        const val THUMB_PREFIX_BYTES = 768_000L
     }
 }
 

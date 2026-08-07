@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -436,10 +437,12 @@ fun LiveControlScreen(
                     LiveBottomTab.Recordings -> LiveRecordingsPanel(
                         querying = dmState.recordingsQuerying,
                         clips = dmState.recordings,
+                        selectedDay = dmState.selectedRecordingDay,
                         downloading = dmState.downloadingClip,
                         progress = dmState.downloadProgressBytes,
                         error = dmState.errorMessage,
                         onRefresh = deviceManagementViewModel::loadAllRecordings,
+                        onSelectDay = deviceManagementViewModel::selectRecordingDay,
                         onClip = { clip ->
                             if (clip.isDownloaded) deviceManagementViewModel.openLocalClip(clip)
                             else deviceManagementViewModel.downloadClip(clip)
@@ -669,73 +672,166 @@ private fun CompactPresets(onGoto: (Int) -> Unit, onSave: (Int) -> Unit) {
 private fun LiveRecordingsPanel(
     querying: Boolean,
     clips: List<RecordedFile>?,
+    selectedDay: String?,
     downloading: String?,
     progress: Long,
     error: String?,
     onRefresh: () -> Unit,
+    onSelectDay: (String) -> Unit,
     onClip: (RecordedFile) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().padding(12.dp)) {
+    val all = clips.orEmpty()
+    val dayKeys = remember(all) { all.map { it.dayKey }.distinct().sortedDescending() }
+    val day = selectedDay ?: dayKeys.firstOrNull()
+    val dayClips = remember(all, day) {
+        all.filter { it.dayKey == day }.sortedByDescending { it.beginTime }
+    }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("SD card clips", fontWeight = FontWeight.SemiBold)
+            Text("Recordings", fontWeight = FontWeight.SemiBold)
             TextButton(onClick = onRefresh, enabled = !querying) {
                 Text(if (querying) "Loading…" else "Refresh", fontSize = 12.sp)
             }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
-        when {
-            querying && clips == null -> CircularProgressIndicator(Modifier.padding(top = 16.dp).align(Alignment.CenterHorizontally))
-            clips.isNullOrEmpty() -> Text("No recordings yet.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp))
-            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
-                items(clips.take(40), key = { it.fileName + it.beginTime }) { clip ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainer)
-                            .combinedClickable(onClick = { onClip(clip) })
-                            .padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        val bmp = remember(clip.thumbPath) {
-                            clip.thumbPath?.let { p ->
-                                val f = File(p)
-                                if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
-                            }
-                        }
-                        Box(
-                            Modifier
-                                .size(56.dp, 36.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (bmp != null) Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                            else Icon(Icons.Default.Videocam, null, Modifier.size(18.dp))
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(clip.beginTime.substringAfter(' ', clip.beginTime), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                            Text(
-                                when {
-                                    downloading == clip.fileName -> "%.1f MB…".format(progress / 1e6)
-                                    clip.isDownloaded -> "On device"
-                                    "[M]" in clip.fileName -> "Motion"
-                                    else -> "On camera"
-                                },
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        when {
-                            downloading == clip.fileName -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                            clip.isDownloaded -> Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
-                            else -> Icon(Icons.Default.CloudDownload, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
+
+        if (dayKeys.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                dayKeys.forEach { key ->
+                    val count = all.count { it.dayKey == key }
+                    RecordingDayChip(
+                        label = recordingDayLabel(key),
+                        count = count,
+                        selected = key == day,
+                        onClick = { onSelectDay(key) },
+                    )
                 }
             }
         }
+
+        when {
+            querying && clips == null -> CircularProgressIndicator(Modifier.padding(top = 16.dp).align(Alignment.CenterHorizontally))
+            dayClips.isEmpty() -> Text(
+                if (querying) "Loading…" else "No recordings for this day.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
+                items(dayClips, key = { it.fileName + it.beginTime }) { clip ->
+                    LiveClipRow(
+                        clip = clip,
+                        downloading = downloading == clip.fileName,
+                        progress = if (downloading == clip.fileName) progress else 0,
+                        onClick = { onClip(clip) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecordingDayChip(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
+    val bg = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Text("$count", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LiveClipRow(
+    clip: RecordedFile,
+    downloading: Boolean,
+    progress: Long,
+    onClick: () -> Unit,
+) {
+    val activityColor = if (clip.hasActivity) Color(0xFFFFB77C) else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .combinedClickable(onClick = onClick)
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val bmp = remember(clip.thumbPath) {
+            clip.thumbPath?.let { p ->
+                val f = File(p)
+                if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
+            }
+        }
+        Box(
+            Modifier
+                .size(72.dp, 44.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (bmp != null) {
+                Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            } else {
+                Icon(
+                    if (clip.hasActivity) Icons.Default.Sensors else Icons.Default.Videocam,
+                    null,
+                    Modifier.size(18.dp),
+                    tint = activityColor,
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(clip.beginTime.substringAfter(' ', clip.beginTime), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    clip.activityLabel,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = activityColor,
+                )
+                Text("·", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    when {
+                        downloading -> "%.1f MB…".format(progress / 1e6)
+                        clip.isDownloaded -> "On device"
+                        else -> "On camera"
+                    },
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        when {
+            downloading -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            clip.isDownloaded -> Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
+            else -> Icon(Icons.Default.CloudDownload, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+private fun recordingDayLabel(day: String): String {
+    val parsed = runCatching { java.time.LocalDate.parse(day) }.getOrNull() ?: return day
+    val today = java.time.LocalDate.now()
+    return when (parsed) {
+        today -> "Today"
+        today.minusDays(1) -> "Yesterday"
+        else -> parsed.format(java.time.format.DateTimeFormatter.ofPattern("EEE MMM d"))
     }
 }
 

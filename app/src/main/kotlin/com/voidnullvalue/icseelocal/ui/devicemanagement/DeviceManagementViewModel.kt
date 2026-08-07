@@ -27,20 +27,23 @@ import com.voidnullvalue.icseelocal.video.ClipThumbnailExtractor
 import com.voidnullvalue.icseelocal.video.RecordedClipExporter
 import com.voidnullvalue.icseelocal.video.RecordedVideoStore
 import com.voidnullvalue.icseelocal.video.SavedVideo
-import java.io.File
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.coroutineContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -51,6 +54,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.io.File
 
 /** Named configs this screen offers as generic advanced editors -- each answers on [DvripConfigChannel.getConfig]/[DvripConfigChannel.setConfig]. */
 enum class AdvancedConfig(val configName: String, val label: String) {
@@ -73,6 +77,21 @@ data class RecordedFile(
 ) {
     val isDownloaded: Boolean get() = !localUri.isNullOrBlank()
     val dayKey: String get() = beginTime.substringBefore(' ', beginTime)
+
+    /**
+     * XM firmware embeds the trigger in the file name:
+     * `[M]` motion, `[A]` alarm, `[R]` scheduled/continuous.
+     */
+    val hasActivity: Boolean
+        get() = "[M]" in fileName || "[A]" in fileName || "[H]" in fileName
+
+    val activityLabel: String
+        get() = when {
+            "[M]" in fileName || "[H]" in fileName -> "Activity"
+            "[A]" in fileName -> "Alarm"
+            "[R]" in fileName -> "Continuous"
+            else -> "Recording"
+        }
 }
 
 enum class ClipLocalState { Remote, Downloading, Local }
@@ -163,6 +182,10 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
     // The camera we currently hold a registry acquire for (null = not holding).
     // Makes releaseSession idempotent so leaveFocus and onStop can't double-release.
     private var held: CameraDescriptor? = null
+
+    /** Serializes SD-card Claim/Download so thumb prefetch never races a full download. */
+    private val sdDownloadMutex = Mutex()
+    private var thumbPrefetchJob: Job? = null
 
     private val _state = MutableStateFlow(DeviceManagementUiState())
     val state: StateFlow<DeviceManagementUiState> = _state.asStateFlow()
@@ -617,7 +640,10 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                 val local = recordingIndex.all().filter { it.cameraId == cameraId }
                 val merged = all.map { clip ->
                     val hit = local.firstOrNull { it.fileName == clip.fileName && it.beginTime == clip.beginTime }
-                    clip.copy(localUri = hit?.uri, thumbPath = hit?.thumbPath)
+                    clip.copy(
+                        localUri = hit?.uri?.takeIf { it.isNotBlank() },
+                        thumbPath = hit?.thumbPath?.takeIf { path -> File(path).exists() },
+                    )
                 }
                 val dayKeys = merged.map { it.dayKey }.distinct().sortedDescending()
                 val selected = _state.value.selectedRecordingDay?.takeIf { it in dayKeys } ?: dayKeys.firstOrNull()
@@ -632,6 +658,7 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                     selectedRecordingDay = selected,
                     errorMessage = diag,
                 )
+                prefetchThumbsForDay(selected)
             }.onFailure { _state.value = _state.value.copy(errorMessage = it.message ?: "Query failed", recordings = emptyList()) }
             _state.value = _state.value.copy(recordingsQuerying = false)
         }
@@ -727,6 +754,109 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
 
     fun selectRecordingDay(day: String) {
         _state.value = _state.value.copy(selectedRecordingDay = day)
+        prefetchThumbsForDay(day)
+    }
+
+    /**
+     * Background: fill missing first-frame JPEGs for [day]'s clips. Uses the
+     * local MP4 when already downloaded; otherwise pulls a short SD-card prefix,
+     * remuxes a tiny MP4, extracts frame 0, and caches the JPEG on disk.
+     */
+    private fun prefetchThumbsForDay(day: String?) {
+        if (day.isNullOrBlank()) return
+        thumbPrefetchJob?.cancel()
+        thumbPrefetchJob = viewModelScope.launch(Dispatchers.IO) {
+            val cameraId = camera?.id ?: return@launch
+            val pending = _state.value.recordings.orEmpty()
+                .filter { it.dayKey == day && it.thumbPath.isNullOrBlank() }
+                .sortedByDescending { it.beginTime }
+                .take(24)
+            for (clip in pending) {
+                ensureActive()
+                if (_state.value.downloadingClip != null) break
+                runCatching { cacheThumbFor(clip, cameraId) }
+            }
+        }
+    }
+
+    private suspend fun cacheThumbFor(clip: RecordedFile, cameraId: String) {
+        val app = getApplication<Application>()
+        val thumb = recordingIndex.thumbFile(cameraId, clip.beginTime)
+        if (thumb.exists() && thumb.length() > 0) {
+            recordingIndex.put(
+                DownloadedClipRecord(
+                    cameraId = cameraId,
+                    fileName = clip.fileName,
+                    beginTime = clip.beginTime,
+                    uri = clip.localUri.orEmpty(),
+                    thumbPath = thumb.absolutePath,
+                ),
+            )
+            patchClipThumb(clip, thumb.absolutePath)
+            return
+        }
+
+        val localUri = clip.localUri
+        if (!localUri.isNullOrBlank()) {
+            if (ClipThumbnailExtractor.extractToFile(app, localUri, thumb)) {
+                recordingIndex.put(
+                    DownloadedClipRecord(
+                        cameraId = cameraId,
+                        fileName = clip.fileName,
+                        beginTime = clip.beginTime,
+                        uri = localUri,
+                        thumbPath = thumb.absolutePath,
+                    ),
+                )
+                patchClipThumb(clip, thumb.absolutePath)
+            }
+            return
+        }
+
+        val manager = sessionManager ?: return
+        val transport = manager.controlTransport ?: return
+        val channel = manager.commandChannel ?: return
+        val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
+        if (clip.fileName.isBlank()) return
+
+        sdDownloadMutex.withLock {
+            coroutineContext.ensureActive()
+            if (_state.value.downloadingClip != null) return
+            // Another pass may have filled it while we waited.
+            if (_state.value.recordings.orEmpty().any {
+                    it.fileName == clip.fileName && it.beginTime == clip.beginTime && !it.thumbPath.isNullOrBlank()
+                }
+            ) return
+
+            val temp = File(app.cacheDir, "thumb_${System.currentTimeMillis()}.mp4")
+            try {
+                val exporter = RecordedClipExporter(transport, channel, sid)
+                exporter.exportThumbMp4(clip.fileName, clip.beginTime, clip.endTime, temp)
+                val ok = ClipThumbnailExtractor.extractToFile(app, temp.absolutePath, thumb)
+                if (ok) {
+                    recordingIndex.put(
+                        DownloadedClipRecord(
+                            cameraId = cameraId,
+                            fileName = clip.fileName,
+                            beginTime = clip.beginTime,
+                            uri = "",
+                            thumbPath = thumb.absolutePath,
+                        ),
+                    )
+                    patchClipThumb(clip, thumb.absolutePath)
+                }
+            } finally {
+                runCatching { temp.delete() }
+            }
+        }
+    }
+
+    private fun patchClipThumb(clip: RecordedFile, thumbPath: String) {
+        val updated = _state.value.recordings?.map {
+            if (it.fileName == clip.fileName && it.beginTime == clip.beginTime) it.copy(thumbPath = thumbPath)
+            else it
+        }
+        _state.value = _state.value.copy(recordings = updated)
     }
 
     fun openLocalClip(clip: RecordedFile) {
@@ -758,6 +888,7 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
         val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
         if (clip.fileName.isBlank()) return
         val cameraId = camera?.id ?: return
+        thumbPrefetchJob?.cancel()
         viewModelScope.launch {
             _state.value = _state.value.copy(
                 downloadingClip = clip.fileName, downloadProgressBytes = 0,
@@ -765,33 +896,32 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
             )
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val app = getApplication<Application>()
-                    val exporter = RecordedClipExporter(transport, channel, sid)
-                    val temp = File(app.cacheDir, "recording_${System.currentTimeMillis()}.mp4")
-                    exporter.exportToMp4(clip.fileName, clip.beginTime, clip.endTime, temp) { bytes ->
-                        _state.value = _state.value.copy(downloadProgressBytes = bytes)
-                    }
-                    val name = "icsee_${clip.beginTime.replace(Regex("[^0-9]"), "")}.mp4"
-                    val saved = RecordedVideoStore.save(app, temp, name)
-                    runCatching { temp.delete() }
-                    if (saved is SavedVideo.Success) {
-                        val thumb = File(
-                            recordingIndex.thumbDir(),
-                            "${cameraId}_${clip.beginTime.replace(Regex("[^0-9]"), "")}.jpg",
-                        )
-                        val ok = ClipThumbnailExtractor.extractToFile(app, saved.uri, thumb)
-                        recordingIndex.put(
-                            DownloadedClipRecord(
-                                cameraId = cameraId,
-                                fileName = clip.fileName,
-                                beginTime = clip.beginTime,
-                                uri = saved.uri,
-                                thumbPath = if (ok) thumb.absolutePath else null,
-                            ),
-                        )
-                        Triple(saved, if (ok) thumb.absolutePath else null, saved.uri)
-                    } else {
-                        Triple(saved, null, null)
+                    sdDownloadMutex.withLock {
+                        val app = getApplication<Application>()
+                        val exporter = RecordedClipExporter(transport, channel, sid)
+                        val temp = File(app.cacheDir, "recording_${System.currentTimeMillis()}.mp4")
+                        exporter.exportToMp4(clip.fileName, clip.beginTime, clip.endTime, temp) { bytes ->
+                            _state.value = _state.value.copy(downloadProgressBytes = bytes)
+                        }
+                        val name = "icsee_${clip.beginTime.replace(Regex("[^0-9]"), "")}.mp4"
+                        val saved = RecordedVideoStore.save(app, temp, name)
+                        runCatching { temp.delete() }
+                        if (saved is SavedVideo.Success) {
+                            val thumb = recordingIndex.thumbFile(cameraId, clip.beginTime)
+                            val ok = ClipThumbnailExtractor.extractToFile(app, saved.uri, thumb)
+                            recordingIndex.put(
+                                DownloadedClipRecord(
+                                    cameraId = cameraId,
+                                    fileName = clip.fileName,
+                                    beginTime = clip.beginTime,
+                                    uri = saved.uri,
+                                    thumbPath = if (ok) thumb.absolutePath else null,
+                                ),
+                            )
+                            Triple(saved, if (ok) thumb.absolutePath else null, saved.uri)
+                        } else {
+                            Triple(saved, null, null)
+                        }
                     }
                 }
             }.onSuccess { (saved, thumbPath, uri) ->
@@ -799,7 +929,7 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                     is SavedVideo.Success -> {
                         val updated = _state.value.recordings?.map {
                             if (it.fileName == clip.fileName && it.beginTime == clip.beginTime) {
-                                it.copy(localUri = uri, thumbPath = thumbPath)
+                                it.copy(localUri = uri, thumbPath = thumbPath ?: it.thumbPath)
                             } else it
                         }
                         _state.value = _state.value.copy(
@@ -816,6 +946,7 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                 _state.value = _state.value.copy(errorMessage = it.message ?: "Download failed")
             }
             _state.value = _state.value.copy(downloadingClip = null)
+            prefetchThumbsForDay(_state.value.selectedRecordingDay)
         }
     }
 

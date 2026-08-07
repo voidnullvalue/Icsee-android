@@ -19,14 +19,16 @@ data class DownloadedClipRecord(
     val cameraId: String,
     val fileName: String,
     val beginTime: String,
-    val uri: String,
+    /** Empty when only a thumbnail was cached (clip still on the camera). */
+    val uri: String = "",
     val thumbPath: String? = null,
     val savedAtMs: Long = System.currentTimeMillis(),
 )
 
 /**
  * Persists which SD-card clips have already been downloaded to the phone,
- * keyed by cameraId + fileName + beginTime.
+ * and/or which first-frame thumbnails have been cached, keyed by
+ * cameraId + fileName + beginTime.
  */
 class RecordingDownloadIndex(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -44,9 +46,20 @@ class RecordingDownloadIndex(private val context: Context) {
             val current = runCatching {
                 json.decodeFromString<List<DownloadedClipRecord>>(prefs[key] ?: "[]")
             }.getOrDefault(emptyList())
+            val existing = current.firstOrNull {
+                it.cameraId == record.cameraId && it.fileName == record.fileName && it.beginTime == record.beginTime
+            }
+            val merged = DownloadedClipRecord(
+                cameraId = record.cameraId,
+                fileName = record.fileName,
+                beginTime = record.beginTime,
+                uri = record.uri.ifBlank { existing?.uri.orEmpty() },
+                thumbPath = record.thumbPath ?: existing?.thumbPath,
+                savedAtMs = record.savedAtMs,
+            )
             val updated = current.filterNot {
                 it.cameraId == record.cameraId && it.fileName == record.fileName && it.beginTime == record.beginTime
-            } + record
+            } + merged
             prefs[key] = json.encodeToString(updated)
         }
     }
@@ -55,6 +68,11 @@ class RecordingDownloadIndex(private val context: Context) {
         all().firstOrNull {
             it.cameraId == cameraId && it.fileName == fileName && it.beginTime == beginTime
         }
+
+    fun thumbFile(cameraId: String, beginTime: String): File {
+        val safe = beginTime.replace(Regex("[^0-9]"), "")
+        return File(thumbDir(), "${cameraId}_$safe.jpg")
+    }
 
     fun thumbDir(): File = File(context.filesDir, "recording_thumbs").also { it.mkdirs() }
 }

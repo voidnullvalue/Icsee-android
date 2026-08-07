@@ -207,7 +207,13 @@ fun PlaybackBrowserScreen(
 @Composable
 private fun DayChip(day: String, count: Int, selected: Boolean, onClick: () -> Unit) {
     val label = runCatching {
-        LocalDate.parse(day).format(DateTimeFormatter.ofPattern("EEE MMM d"))
+        val parsed = LocalDate.parse(day)
+        val today = LocalDate.now()
+        when (parsed) {
+            today -> "Today"
+            today.minusDays(1) -> "Yesterday"
+            else -> parsed.format(DateTimeFormatter.ofPattern("EEE MMM d"))
+        }
     }.getOrDefault(day)
     val bg = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
     val fg = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
@@ -264,7 +270,7 @@ private fun DayTimelineStrip(
                     val color = when {
                         downloading == clip.fileName -> MaterialTheme.colorScheme.tertiary
                         clip.isDownloaded -> MaterialTheme.colorScheme.primary
-                        "[M]" in clip.fileName -> Color(0xFFFFB77C)
+                        clip.hasActivity -> Color(0xFFFFB77C)
                         else -> MaterialTheme.colorScheme.secondary
                     }
                     BoxWithFraction(fracStart, fracWidth, color) { onClipClick(clip) }
@@ -316,9 +322,12 @@ private fun ClipRow(
                 fontWeight = FontWeight.SemiBold,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                clipTag(clip.fileName)?.let {
-                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
-                }
+                Text(
+                    clip.activityLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (clip.hasActivity) Color(0xFFFFB77C) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 if (clip.sizeText.isNotBlank()) {
                     Text(clip.sizeText, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -357,7 +366,7 @@ private fun ThumbBox(clip: RecordedFile) {
         when {
             bitmap != null -> Image(bitmap, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             clip.isDownloaded -> Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
-            "[M]" in clip.fileName -> Icon(Icons.Default.Sensors, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(22.dp))
+            clip.hasActivity -> Icon(Icons.Default.Sensors, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(22.dp))
             else -> Icon(Icons.Default.Videocam, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
         }
     }
@@ -409,11 +418,5 @@ private fun parseDateTime(t: String): LocalDateTime? =
     runCatching {
         LocalDateTime.parse(t.trim(), DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
     }.getOrNull()
-
-private fun clipTag(fileName: String): String? = when {
-    "[M]" in fileName -> "motion"
-    "[R]" in fileName -> "scheduled"
-    else -> null
-}
 
 private fun timeOnly(t: String): String = t.substringAfter(' ', t).ifBlank { t }
