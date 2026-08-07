@@ -7,10 +7,13 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.PlayerView
 import com.voidnullvalue.icseelocal.app.IcseeApplication
 import com.voidnullvalue.icseelocal.audio.FileAudioSource
 import com.voidnullvalue.icseelocal.audio.MicrophoneSource
 import com.voidnullvalue.icseelocal.audio.TalkController
+import com.voidnullvalue.icseelocal.config.ConfigResult
+import com.voidnullvalue.icseelocal.config.DvripConfigChannel
 import com.voidnullvalue.icseelocal.model.CameraDescriptor
 import com.voidnullvalue.icseelocal.model.ConnectionState
 import com.voidnullvalue.icseelocal.model.StreamType
@@ -21,16 +24,29 @@ import com.voidnullvalue.icseelocal.ptz.PtzController
 import com.voidnullvalue.icseelocal.session.CameraCredentials
 import com.voidnullvalue.icseelocal.session.CameraSessionManager
 import com.voidnullvalue.icseelocal.storage.CameraStore
+import com.voidnullvalue.icseelocal.video.LiveStreamRecorder
+import com.voidnullvalue.icseelocal.video.RecordedVideoStore
 import com.voidnullvalue.icseelocal.video.RtspPlayerState
 import com.voidnullvalue.icseelocal.video.RtspVideoPlayer
+import com.voidnullvalue.icseelocal.video.SavedVideo
+import com.voidnullvalue.icseelocal.video.SnapshotCapture
+import com.voidnullvalue.icseelocal.video.SnapshotResult
 import com.voidnullvalue.icseelocal.video.VideoStats
 import com.voidnullvalue.icseelocal.video.VideoStreamController
+import java.io.File
+import java.lang.ref.WeakReference
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class LiveControlViewModel(application: Application) : AndroidViewModel(application), DefaultLifecycleObserver {
     private val store = CameraStore(application)
@@ -111,6 +127,308 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
 
     private val _videoStats = MutableStateFlow(VideoStats())
     val videoStats: StateFlow<VideoStats> = _videoStats.asStateFlow()
+
+    private val _cruiseActive = MutableStateFlow(false)
+    val cruiseActive: StateFlow<Boolean> = _cruiseActive.asStateFlow()
+
+    private val _dayNightMode = MutableStateFlow(0) // 0 Auto, 1 Day, 2 Night
+    val dayNightMode: StateFlow<Int> = _dayNightMode.asStateFlow()
+
+    private val _statusToast = MutableStateFlow<String?>(null)
+    val statusToast: StateFlow<String?> = _statusToast.asStateFlow()
+
+    private val _recording = MutableStateFlow(false)
+    val recording: StateFlow<Boolean> = _recording.asStateFlow()
+
+    private val _recordElapsedMs = MutableStateFlow(0L)
+    val recordElapsedMs: StateFlow<Long> = _recordElapsedMs.asStateFlow()
+
+    private var liveRecorder: LiveStreamRecorder? = null
+    private var recordOutFile: File? = null
+    private var recordTicker: Job? = null
+    private var playerViewRef: WeakReference<PlayerView>? = null
+
+    @UnstableApi
+    val muted: StateFlow<Boolean> = rtspPlayer.muted
+
+    @UnstableApi
+    val bitrateBps: StateFlow<Long> = rtspPlayer.bitrateBps
+
+    fun bindPlayerView(view: PlayerView?) {
+        playerViewRef = view?.let { WeakReference(it) }
+    }
+
+    fun clearStatusToast() {
+        _statusToast.value = null
+    }
+
+    @UnstableApi
+    fun toggleMute() = rtspPlayer.toggleMute()
+
+    @UnstableApi
+    fun setStreamType(type: StreamType) {
+        val found = _camera.value ?: return
+        if (found.streamType == type) return
+        viewModelScope.launch {
+            val updated = found.copy(streamType = type)
+            val creds = store.credentialsFor(found.id)
+            store.save(updated, creds)
+            _camera.value = updated
+            val credentials = creds ?: CameraCredentials("", "")
+            rtspPlayer.start(
+                host = updated.host,
+                port = updated.rtspPort,
+                username = credentials.username,
+                password = credentials.password,
+                channel = updated.channel + 1,
+                mainStream = type == StreamType.MAIN,
+                preferFactoryRtspAccount = updated.rtspFallbackEnabled,
+            )
+        }
+    }
+
+    fun toggleCruise() {
+        if (_cruiseActive.value) {
+            stopTour()
+            _cruiseActive.value = false
+        } else {
+            startTour()
+            _cruiseActive.value = true
+        }
+    }
+
+    fun zoomIn() = ptzController?.onPointerDown(PtzCommand.ZOOM_TILE, _speedStep.value)
+    fun zoomOut() = ptzController?.onPointerDown(PtzCommand.ZOOM_WIDE, _speedStep.value)
+    fun zoomStop() = ptzController?.onPointerUp()
+
+    fun setDayNightMode(mode: Int) {
+        val manager = sessionManager ?: run {
+            _statusToast.value = "Connect to camera to change day/night"
+            return
+        }
+        val transport = manager.controlTransport ?: return
+        val channel = manager.commandChannel ?: return
+        val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
+        viewModelScope.launch {
+            val config = DvripConfigChannel(transport, channel, sid, getApplication())
+            when (val got = config.getConfig("Camera.ParamEx")) {
+                is ConfigResult.Success -> {
+                    val root = got.value
+                    val patched = patchDayNightMode(root, mode)
+                    if (patched == null) {
+                        _statusToast.value = "Day/night field not found on this camera"
+                        return@launch
+                    }
+                    when (config.setConfig("Camera.ParamEx", patched)) {
+                        is ConfigResult.Success -> {
+                            _dayNightMode.value = mode
+                            _statusToast.value = when (mode) {
+                                1 -> "Day mode"
+                                2 -> "Night mode"
+                                else -> "Auto day/night"
+                            }
+                        }
+                        is ConfigResult.Failure -> _statusToast.value = "Day/night set failed"
+                    }
+                }
+                is ConfigResult.Failure -> _statusToast.value = "Could not load image settings"
+            }
+        }
+    }
+
+    @UnstableApi
+    fun takeSnapshot() {
+        val view = playerViewRef?.get() ?: run {
+            _statusToast.value = "Video not ready for snapshot"
+            return
+        }
+        val name = _camera.value?.displayName ?: "camera"
+        viewModelScope.launch {
+            val capture = SnapshotCapture(getApplication())
+            val surface = findSurfaceView(view)
+            val result = if (surface != null) {
+                capture.captureFromSurfaceView(surface, name)
+            } else {
+                // TextureView path: grab bitmap directly
+                val texture = findTextureView(view)
+                val bmp = texture?.bitmap
+                if (bmp == null) SnapshotResult.Failure("no frame")
+                else {
+                    // Reuse SnapshotCapture's gallery save via a temp surface path — save manually
+                    saveBitmapSnapshot(bmp, name).also { bmp.recycle() }
+                }
+            }
+            capture.release()
+            _statusToast.value = when (result) {
+                is SnapshotResult.Success -> "Snapshot saved"
+                is SnapshotResult.Failure -> "Snapshot failed: ${result.reason}"
+            }
+        }
+    }
+
+    @UnstableApi
+    fun toggleRecording() {
+        if (_recording.value) stopRecording() else startRecording()
+    }
+
+    @UnstableApi
+    private fun startRecording() {
+        val view = playerViewRef?.get() ?: run {
+            _statusToast.value = "Video not ready to record"
+            return
+        }
+        val app = getApplication<Application>()
+        val file = File(app.cacheDir, "live_${System.currentTimeMillis()}.mp4")
+        val recorder = LiveStreamRecorder(app)
+        if (!recorder.start(view, file)) {
+            _statusToast.value = "Already recording"
+            return
+        }
+        liveRecorder = recorder
+        recordOutFile = file
+        _recording.value = true
+        _recordElapsedMs.value = 0
+        recordTicker = viewModelScope.launch {
+            while (_recording.value) {
+                _recordElapsedMs.value = recorder.elapsedMs
+                kotlinx.coroutines.delay(250)
+            }
+        }
+        _statusToast.value = "Recording…"
+    }
+
+    @UnstableApi
+    private fun stopRecording() {
+        val recorder = liveRecorder
+        val file = recordOutFile
+        liveRecorder = null
+        recordOutFile = null
+        recordTicker?.cancel()
+        recordTicker = null
+        _recording.value = false
+        recorder?.stop()
+        if (file == null || !file.exists() || file.length() < 1000) {
+            runCatching { file?.delete() }
+            _statusToast.value = "Recording failed (too short)"
+            return
+        }
+        viewModelScope.launch {
+            val name = "icsee_live_${System.currentTimeMillis()}.mp4"
+            when (val saved = RecordedVideoStore.save(getApplication(), file, name)) {
+                is SavedVideo.Success -> _statusToast.value = "Saved ${saved.label}"
+                is SavedVideo.Failure -> _statusToast.value = "Save failed: ${saved.reason}"
+            }
+            runCatching { file.delete() }
+        }
+    }
+
+    private fun saveBitmapSnapshot(bitmap: android.graphics.Bitmap, cameraName: String): SnapshotResult {
+        val capture = SnapshotCapture(getApplication())
+        // SnapshotCapture only exposes SurfaceView path; write via a one-off MediaStore copy.
+        return try {
+            val tmp = File.createTempFile("snap", ".jpg", getApplication<Application>().cacheDir)
+            java.io.FileOutputStream(tmp).use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, it) }
+            // Re-read through RecordedVideoStore-style image save
+            val result = SnapshotCapture(getApplication()).let { c ->
+                // Use internal pattern: Pictures via MediaStore — duplicate minimal save
+                saveJpegToGallery(tmp, cameraName).also { tmp.delete(); c.release() }
+            }
+            capture.release()
+            result
+        } catch (e: Exception) {
+            capture.release()
+            SnapshotResult.Failure(e.message ?: "save failed")
+        }
+    }
+
+    private fun saveJpegToGallery(file: File, cameraName: String): SnapshotResult {
+        val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+        val safe = cameraName.replace(Regex("[^A-Za-z0-9_-]"), "_")
+        val filename = "icsee_${safe}_$timestamp.jpg"
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, filename)
+            put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/iCSeeLocalControl")
+        }
+        val resolver = getApplication<Application>().contentResolver
+        val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: return SnapshotResult.Failure("MediaStore insert failed")
+        return try {
+            resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
+                ?: return SnapshotResult.Failure("write failed")
+            SnapshotResult.Success(uri.toString())
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            SnapshotResult.Failure(e.message ?: "save failed")
+        }
+    }
+
+    private fun findSurfaceView(root: android.view.View): android.view.SurfaceView? {
+        if (root is android.view.SurfaceView) return root
+        if (root is android.view.ViewGroup) {
+            for (i in 0 until root.childCount) {
+                findSurfaceView(root.getChildAt(i))?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun findTextureView(root: android.view.View): android.view.TextureView? {
+        if (root is android.view.TextureView) return root
+        if (root is android.view.ViewGroup) {
+            for (i in 0 until root.childCount) {
+                findTextureView(root.getChildAt(i))?.let { return it }
+            }
+        }
+        return null
+    }
+
+    companion object {
+        /**
+         * Dance easter-egg media: the Funkytown video on the Internet Archive, a
+         * plain DRM-free MP4 (H.264 + AAC). The on-screen ExoPlayer streams it
+         * for the visual; [FileAudioSource] decodes its audio for the camera
+         * speaker + PTZ beats. Not a YouTube embed (blocked, error 152) and not a
+         * stream-rip -- a direct read of a publicly-hosted file.
+         */
+        const val DANCE_MEDIA_URL =
+            "https://archive.org/download/Lipps_Inc_Funky_Town/Lipps_Inc_Funky_Town.mp4"
+
+        /** Patch Camera.ParamEx so DayNightSwitch[0].SwitchMode = [mode]. */
+        internal fun patchDayNightMode(root: JsonElement, mode: Int): JsonElement? =
+            when (root) {
+                is JsonArray -> patchParamExArray(root, mode)
+                is JsonObject -> {
+                    // Unusual envelope — try nested array under a single key, else fail.
+                    root.values.firstOrNull { it is JsonArray }?.let { patchDayNightMode(it, mode) }
+                }
+                else -> null
+            }
+
+        private fun patchParamExArray(arr: JsonArray, mode: Int): JsonElement? {
+            if (arr.isEmpty()) return null
+            val first = arr[0] as? JsonObject ?: return null
+            val dns = first["DayNightSwitch"] as? JsonArray ?: return null
+            if (dns.isEmpty()) return null
+            val dns0 = dns[0] as? JsonObject ?: return null
+            val newDns0 = buildJsonObject {
+                dns0.forEach { (k, v) -> put(k, v) }
+                put("SwitchMode", mode)
+            }
+            val newDns = buildJsonArray {
+                add(newDns0)
+                for (i in 1 until dns.size) add(dns[i])
+            }
+            val newFirst = buildJsonObject {
+                first.forEach { (k, v) -> if (k != "DayNightSwitch") put(k, v) }
+                put("DayNightSwitch", newDns)
+            }
+            return buildJsonArray {
+                add(newFirst)
+                for (i in 1 until arr.size) add(arr[i])
+            }
+        }
+    }
 
     init {
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
@@ -225,6 +543,8 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         sessionStateJob = null
         stopTalk()
         stopDance()
+        if (_recording.value) stopRecording()
+        _cruiseActive.value = false
         videoStatsJob?.cancel()
         videoController?.stop()
         videoController = null
@@ -410,20 +730,9 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
 
     @UnstableApi
     override fun onCleared() {
+        if (_recording.value) stopRecording()
         releaseSession()
         rtspPlayer.release()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(this)
-    }
-
-    companion object {
-        /**
-         * Dance easter-egg media: the Funkytown video on the Internet Archive, a
-         * plain DRM-free MP4 (H.264 + AAC). The on-screen ExoPlayer streams it
-         * for the visual; [FileAudioSource] decodes its audio for the camera
-         * speaker + PTZ beats. Not a YouTube embed (blocked, error 152) and not a
-         * stream-rip -- a direct read of a publicly-hosted file.
-         */
-        const val DANCE_MEDIA_URL =
-            "https://archive.org/download/Lipps_Inc_Funky_Town/Lipps_Inc_Funky_Town.mp4"
     }
 }

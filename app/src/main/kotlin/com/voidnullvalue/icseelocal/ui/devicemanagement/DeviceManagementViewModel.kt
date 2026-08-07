@@ -21,6 +21,9 @@ import com.voidnullvalue.icseelocal.session.CameraCredentials
 import com.voidnullvalue.icseelocal.session.CameraSessionManager
 import com.voidnullvalue.icseelocal.session.DvripCommandChannel
 import com.voidnullvalue.icseelocal.storage.CameraStore
+import com.voidnullvalue.icseelocal.storage.DownloadedClipRecord
+import com.voidnullvalue.icseelocal.storage.RecordingDownloadIndex
+import com.voidnullvalue.icseelocal.video.ClipThumbnailExtractor
 import com.voidnullvalue.icseelocal.video.RecordedClipExporter
 import com.voidnullvalue.icseelocal.video.RecordedVideoStore
 import com.voidnullvalue.icseelocal.video.SavedVideo
@@ -65,7 +68,14 @@ data class RecordedFile(
     val endTime: String,
     val fileName: String,
     val sizeText: String,
-)
+    val localUri: String? = null,
+    val thumbPath: String? = null,
+) {
+    val isDownloaded: Boolean get() = !localUri.isNullOrBlank()
+    val dayKey: String get() = beginTime.substringBefore(' ', beginTime)
+}
+
+enum class ClipLocalState { Remote, Downloading, Local }
 
 /**
  * One account as reported by `GetAllUser` (msg 1472). [memo] is the telling field
@@ -123,16 +133,19 @@ data class DeviceManagementUiState(
     val formatRequested: Boolean = false,
     val recordings: List<RecordedFile>? = null,
     val recordingsQuerying: Boolean = false,
+    val selectedRecordingDay: String? = null,
     val downloadingClip: String? = null,
     val downloadProgressBytes: Long = 0,
     val savedVideoUri: String? = null,
     val savedVideoLabel: String? = null,
+    val playUri: String? = null,
     val accounts: List<DeviceAccount>? = null,
     val accountsQuerying: Boolean = false,
 )
 
 class DeviceManagementViewModel(application: Application) : AndroidViewModel(application), DefaultLifecycleObserver {
     private val store = CameraStore(application)
+    private val recordingIndex = RecordingDownloadIndex(application)
     // Shared session owner -- this ViewModel no longer builds or shuts down managers;
     // it acquires the registry's single session for the camera (shared with live
     // view, for zero extra logins when both are used) and releases it. See
@@ -591,22 +604,34 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
             runCatching {
                 val storageJson = "{\"Name\":\"StorageInfo\",\"StorageInfo\":{},\"SessionID\":\"0x%08x\"}".format(sid.toLong())
                 val storageText = sendAndAwait(transport, channel, DvripMessageIds.INFO_GET, DvripMessageIds.INFO_GET_RESPONSE, storageJson)
-                val days = recordedDays(storageText)
+                val storageDays = recordedDays(storageText)
                 val all = ArrayList<RecordedFile>()
                 var lastDiag: String? = null
-                for (day in days) {
+                for (day in storageDays) {
                     val (files, diag) = queryDay(transport, channel, sid, ch, day)
                     all += files
                     if (diag != null) lastDiag = diag
                 }
                 all.sortByDescending { it.beginTime }
+                val cameraId = camera?.id ?: ""
+                val local = recordingIndex.all().filter { it.cameraId == cameraId }
+                val merged = all.map { clip ->
+                    val hit = local.firstOrNull { it.fileName == clip.fileName && it.beginTime == clip.beginTime }
+                    clip.copy(localUri = hit?.uri, thumbPath = hit?.thumbPath)
+                }
+                val dayKeys = merged.map { it.dayKey }.distinct().sortedDescending()
+                val selected = _state.value.selectedRecordingDay?.takeIf { it in dayKeys } ?: dayKeys.firstOrNull()
                 val diag = when {
-                    all.isNotEmpty() -> null
+                    merged.isNotEmpty() -> null
                     lastDiag != null -> lastDiag
-                    days.isEmpty() -> "SD card reports no recorded time span."
+                    storageDays.isEmpty() -> "SD card reports no recorded time span."
                     else -> "No recordings on the SD card."
                 }
-                _state.value = _state.value.copy(recordings = all, errorMessage = diag)
+                _state.value = _state.value.copy(
+                    recordings = merged,
+                    selectedRecordingDay = selected,
+                    errorMessage = diag,
+                )
             }.onFailure { _state.value = _state.value.copy(errorMessage = it.message ?: "Query failed", recordings = emptyList()) }
             _state.value = _state.value.copy(recordingsQuerying = false)
         }
@@ -700,6 +725,19 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
+    fun selectRecordingDay(day: String) {
+        _state.value = _state.value.copy(selectedRecordingDay = day)
+    }
+
+    fun openLocalClip(clip: RecordedFile) {
+        val uri = clip.localUri ?: return
+        _state.value = _state.value.copy(playUri = uri)
+    }
+
+    fun clearPlayUri() {
+        _state.value = _state.value.copy(playUri = null)
+    }
+
     /**
      * Downloads [clip] off the SD card (DVRIP OPPlayBack), remuxes the XM-framed
      * HEVC to a standard MP4, and saves it into the device's Movies collection so
@@ -710,11 +748,16 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
      * live-confirmed 2026-07-09.
      */
     fun downloadClip(clip: RecordedFile) {
+        if (clip.isDownloaded) {
+            openLocalClip(clip)
+            return
+        }
         val manager = sessionManager ?: return
         val transport = manager.controlTransport ?: return
         val channel = manager.commandChannel ?: return
         val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
         if (clip.fileName.isBlank()) return
+        val cameraId = camera?.id ?: return
         viewModelScope.launch {
             _state.value = _state.value.copy(
                 downloadingClip = clip.fileName, downloadProgressBytes = 0,
@@ -731,14 +774,42 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                     val name = "icsee_${clip.beginTime.replace(Regex("[^0-9]"), "")}.mp4"
                     val saved = RecordedVideoStore.save(app, temp, name)
                     runCatching { temp.delete() }
-                    saved
+                    if (saved is SavedVideo.Success) {
+                        val thumb = File(
+                            recordingIndex.thumbDir(),
+                            "${cameraId}_${clip.beginTime.replace(Regex("[^0-9]"), "")}.jpg",
+                        )
+                        val ok = ClipThumbnailExtractor.extractToFile(app, saved.uri, thumb)
+                        recordingIndex.put(
+                            DownloadedClipRecord(
+                                cameraId = cameraId,
+                                fileName = clip.fileName,
+                                beginTime = clip.beginTime,
+                                uri = saved.uri,
+                                thumbPath = if (ok) thumb.absolutePath else null,
+                            ),
+                        )
+                        Triple(saved, if (ok) thumb.absolutePath else null, saved.uri)
+                    } else {
+                        Triple(saved, null, null)
+                    }
                 }
-            }.onSuccess { saved ->
+            }.onSuccess { (saved, thumbPath, uri) ->
                 when (saved) {
-                    is SavedVideo.Success -> _state.value = _state.value.copy(
-                        savedVideoUri = saved.uri, savedVideoLabel = saved.label,
-                        statusMessage = "Saved to ${saved.label}",
-                    )
+                    is SavedVideo.Success -> {
+                        val updated = _state.value.recordings?.map {
+                            if (it.fileName == clip.fileName && it.beginTime == clip.beginTime) {
+                                it.copy(localUri = uri, thumbPath = thumbPath)
+                            } else it
+                        }
+                        _state.value = _state.value.copy(
+                            recordings = updated,
+                            savedVideoUri = saved.uri,
+                            savedVideoLabel = saved.label,
+                            statusMessage = "Saved to ${saved.label}",
+                            playUri = uri,
+                        )
+                    }
                     is SavedVideo.Failure -> _state.value = _state.value.copy(errorMessage = saved.reason)
                 }
             }.onFailure {

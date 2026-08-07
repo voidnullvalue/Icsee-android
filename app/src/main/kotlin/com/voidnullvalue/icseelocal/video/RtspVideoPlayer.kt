@@ -8,6 +8,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,12 +39,20 @@ class RtspVideoPlayer(context: Context) {
     private val _state = MutableStateFlow<RtspPlayerState>(RtspPlayerState.Idle)
     val state: StateFlow<RtspPlayerState> = _state.asStateFlow()
 
+    private val _muted = MutableStateFlow(true)
+    val muted: StateFlow<Boolean> = _muted.asStateFlow()
+
+    /** Estimated stream bitrate in bits/sec (0 when unknown). */
+    private val _bitrateBps = MutableStateFlow(0L)
+    val bitrateBps: StateFlow<Long> = _bitrateBps.asStateFlow()
+
     private val renderersFactory = DefaultRenderersFactory(context)
         // Soft-decode when the primary HW codec rejects the format (e.g.
         // OMX.qcom… avc with NO_EXCEEDS_CAPABILITIES on 2304×1296).
         .setEnableDecoderFallback(true)
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context, renderersFactory).build().apply {
+        volume = 0f // muted by default — user unmutes from live chrome
         addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY && isPlaying) {
@@ -71,7 +80,24 @@ class RtspVideoPlayer(context: Context) {
                 }
             }
         })
+        addAnalyticsListener(object : AnalyticsListener {
+            override fun onBandwidthEstimate(
+                eventTime: AnalyticsListener.EventTime,
+                totalLoadTimeMs: Int,
+                totalBytesLoaded: Long,
+                bitrateEstimate: Long,
+            ) {
+                if (bitrateEstimate > 0) _bitrateBps.value = bitrateEstimate
+            }
+        })
     }
+
+    fun setMuted(mute: Boolean) {
+        _muted.value = mute
+        exoPlayer.volume = if (mute) 0f else 1f
+    }
+
+    fun toggleMute() = setMuted(!_muted.value)
 
     private data class Attempt(
         val url: String,
