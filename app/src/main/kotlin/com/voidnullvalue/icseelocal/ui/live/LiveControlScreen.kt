@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
@@ -94,6 +95,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -101,9 +104,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -128,14 +133,17 @@ import com.voidnullvalue.icseelocal.model.StreamType
 import com.voidnullvalue.icseelocal.ptz.PtzCommand
 import com.voidnullvalue.icseelocal.ui.devicemanagement.DeviceManagementViewModel
 import com.voidnullvalue.icseelocal.ui.devicemanagement.RecordedFile
+import com.voidnullvalue.icseelocal.ui.devicemanagement.RecordingDayTimeline
 import com.voidnullvalue.icseelocal.video.RtspPlayerState
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private val StatusGreen = Color(0xFF4ADE80)
 private val StatusAmber = Color(0xFFFBBF24)
 private val OverlayBg = Color(0x99000000)
 
-private enum class LiveBottomTab { Controls, Recordings }
+private enum class LiveBottomTab { Controls, Recordings, Saved }
 
 @UnstableApi
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -165,6 +173,8 @@ fun LiveControlScreen(
     val statusToast by viewModel.statusToast.collectAsState()
     val recording by viewModel.recording.collectAsState()
     val recordElapsedMs by viewModel.recordElapsedMs.collectAsState()
+    val presetThumbs by viewModel.presetThumbPaths.collectAsState()
+    val presetThumbEpoch by viewModel.presetThumbEpoch.collectAsState()
     val dmState by deviceManagementViewModel.state.collectAsState()
 
     val context = LocalContext.current
@@ -180,19 +190,34 @@ fun LiveControlScreen(
     }
 
     var fullscreen by remember { mutableStateOf(false) }
+    var fsChromeVisible by remember { mutableStateOf(true) }
     var menuOpen by remember { mutableStateOf(false) }
     var bottomTab by remember { mutableStateOf(LiveBottomTab.Controls) }
     // Digital zoom (view transform — not PTZ optical zoom).
     var scale by remember { mutableFloatStateOf(1f) }
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    var offsetY by remember { mutableFloatStateOf(0f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    var viewportSize by remember { mutableStateOf(IntSize.Zero) }
 
-    fun resetZoom() { scale = 1f; offsetX = 0f; offsetY = 0f }
+    fun clampPan(raw: Offset, s: Float): Offset {
+        if (s <= 1.01f || viewportSize.width == 0) return Offset.Zero
+        // With center-origin scale, max translation keeps edges reachable.
+        val maxX = viewportSize.width * (s - 1f) / 2f
+        val maxY = viewportSize.height * (s - 1f) / 2f
+        return Offset(
+            raw.x.coerceIn(-maxX, maxX),
+            raw.y.coerceIn(-maxY, maxY),
+        )
+    }
+    fun resetZoom() { scale = 1f; offset = Offset.Zero }
     fun bumpZoom(factor: Float) {
         val next = (scale * factor).coerceIn(1f, 5f)
         scale = next
-        if (next <= 1.01f) { offsetX = 0f; offsetY = 0f }
+        offset = clampPan(offset, next)
     }
+
+    var localMedia by remember { mutableStateOf<List<com.voidnullvalue.icseelocal.storage.LocalMediaItem>>(emptyList()) }
+    var localMediaPlayUri by remember { mutableStateOf<String?>(null) }
+    var localMediaImageUri by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(statusToast) {
         if (statusToast != null) {
@@ -206,21 +231,57 @@ fun LiveControlScreen(
                 deviceManagementViewModel.loadAllRecordings()
             }
         }
+        if (bottomTab == LiveBottomTab.Saved) {
+            localMedia = withContext(Dispatchers.IO) {
+                com.voidnullvalue.icseelocal.storage.LocalMediaLibrary.listAll(context)
+            }
+        }
+    }
+    // Auto-hide fullscreen chrome after a few seconds of no interaction.
+    LaunchedEffect(fullscreen, fsChromeVisible) {
+        if (fullscreen && fsChromeVisible) {
+            kotlinx.coroutines.delay(3500)
+            fsChromeVisible = false
+        }
     }
 
-    // Immersive chrome only — do NOT force landscape (that used to recreate the
-    // Activity and drop the nav stack back to the camera list).
+    // Keep the display awake while live video is playing (or fullscreen / clip player open).
+    val keepAwake = fullscreen ||
+        rtspState is RtspPlayerState.Playing ||
+        dmState.playUri != null ||
+        dmState.playBuffering ||
+        localMediaPlayUri != null ||
+        localMediaImageUri != null
+    DisposableEffect(keepAwake) {
+        val window = activity?.window
+        if (keepAwake && window != null) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    // Immersive chrome + force landscape in fullscreen. configChanges on the
+    // Activity keeps the nav stack alive across the orientation change.
     DisposableEffect(fullscreen) {
         val window = activity?.window
-        if (fullscreen && window != null) {
-            WindowCompat.setDecorFitsSystemWindows(window, false)
-            WindowInsetsControllerCompat(window, window.decorView).let { c ->
-                c.hide(WindowInsetsCompat.Type.systemBars())
-                c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (fullscreen) {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            fsChromeVisible = true
+            if (window != null) {
+                WindowCompat.setDecorFitsSystemWindows(window, false)
+                WindowInsetsControllerCompat(window, window.decorView).let { c ->
+                    c.hide(WindowInsetsCompat.Type.systemBars())
+                    c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
             }
-        } else if (window != null) {
-            WindowCompat.setDecorFitsSystemWindows(window, true)
-            WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+        } else {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            if (window != null) {
+                WindowCompat.setDecorFitsSystemWindows(window, true)
+                WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+            }
         }
         onDispose {
             if (window != null) {
@@ -252,63 +313,99 @@ fun LiveControlScreen(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .graphicsLayer(
-                        scaleX = scale, scaleY = scale,
-                        translationX = offsetX, translationY = offsetY,
-                    )
-                    .pointerInput(Unit) {
-                        detectTransformGestures { _, pan, zoom, _ ->
-                            val next = (scale * zoom).coerceIn(1f, 5f)
-                            scale = next
-                            if (next > 1.01f) {
-                                offsetX += pan.x
-                                offsetY += pan.y
-                            } else {
-                                offsetX = 0f; offsetY = 0f
+                    .clipToBounds()
+                    .onSizeChanged { viewportSize = it }
+                    // Gestures on untransformed coords; visual scale applied after.
+                    // Key must stay stable (not [scale]) or the pinch restarts mid-gesture.
+                    .pointerInput(fullscreen) {
+                        detectTransformGestures(
+                            panZoomLock = true,
+                        ) { centroid, pan, zoom, _ ->
+                            val oldScale = scale
+                            val newScale = (oldScale * zoom).coerceIn(1f, 5f)
+                            if (newScale <= 1.01f) {
+                                scale = 1f
+                                offset = Offset.Zero
+                                return@detectTransformGestures
+                            }
+                            // Zoom about the pinch midpoint so the content under
+                            // the fingers stays put (center-origin graphicsLayer).
+                            val cx = size.width / 2f
+                            val cy = size.height / 2f
+                            val focus = Offset(centroid.x - cx, centroid.y - cy)
+                            val ratio = newScale / oldScale
+                            val zoomed = Offset(
+                                offset.x * ratio + focus.x * (1f - ratio),
+                                offset.y * ratio + focus.y * (1f - ratio),
+                            )
+                            // Pan tracks the finger 1:1 in screen space.
+                            scale = newScale
+                            offset = clampPan(zoomed + pan, newScale)
+                            if (fullscreen) fsChromeVisible = true
+                        }
+                    }
+                    .pointerInput(fullscreen) {
+                        if (fullscreen) {
+                            detectTapGestures {
+                                fsChromeVisible = !fsChromeVisible
                             }
                         }
+                    }
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
                     },
             ) {
                 VideoSurface(viewModel, rtspState, Modifier.fillMaxSize())
             }
 
-            // Top bar
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            val showChrome = !fullscreen || fsChromeVisible
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showChrome,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut(),
+                modifier = Modifier.align(Alignment.TopCenter),
             ) {
-                IconButton(onClick = {
-                    if (fullscreen) { resetZoom(); fullscreen = false } else onBack()
-                }) {
-                    Icon(
-                        if (fullscreen) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White,
-                    )
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(camera?.displayName ?: "Live", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, fontSize = 15.sp)
-                    StatusPill(state, rtspState is RtspPlayerState.Playing)
-                }
-                if (!fullscreen) {
-                    Box {
-                        IconButton(onClick = { menuOpen = true }) {
-                            Icon(Icons.Default.MoreVert, "More", tint = Color.White)
-                        }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(text = { Text("Device management") }, onClick = { menuOpen = false; onOpenDeviceManagement() }, leadingIcon = { Icon(Icons.Default.Settings, null) })
-                            DropdownMenuItem(text = { Text("Image settings") }, onClick = { menuOpen = false; onOpenImageSettings() }, leadingIcon = { Icon(Icons.Default.LightMode, null) })
-                            DropdownMenuItem(text = { Text("Motion detection") }, onClick = { menuOpen = false; onOpenMotionDetect() }, leadingIcon = { Icon(Icons.Default.Sensors, null) })
-                            DropdownMenuItem(text = { Text("Diagnostics") }, onClick = { menuOpen = false; onOpenDiagnostics() }, leadingIcon = { Icon(Icons.Default.Refresh, null) })
+                // Top bar
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = {
+                        if (fullscreen) { resetZoom(); fullscreen = false } else onBack()
+                    }) {
+                        Icon(
+                            if (fullscreen) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White,
+                        )
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(camera?.displayName ?: "Live", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, fontSize = 15.sp)
+                        StatusPill(state, rtspState is RtspPlayerState.Playing)
+                    }
+                    if (!fullscreen) {
+                        Box {
+                            IconButton(onClick = { menuOpen = true }) {
+                                Icon(Icons.Default.MoreVert, "More", tint = Color.White)
+                            }
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(text = { Text("Device management") }, onClick = { menuOpen = false; onOpenDeviceManagement() }, leadingIcon = { Icon(Icons.Default.Settings, null) })
+                                DropdownMenuItem(text = { Text("Image settings") }, onClick = { menuOpen = false; onOpenImageSettings() }, leadingIcon = { Icon(Icons.Default.LightMode, null) })
+                                DropdownMenuItem(text = { Text("Motion detection") }, onClick = { menuOpen = false; onOpenMotionDetect() }, leadingIcon = { Icon(Icons.Default.Sensors, null) })
+                                DropdownMenuItem(text = { Text("Diagnostics") }, onClick = { menuOpen = false; onOpenDiagnostics() }, leadingIcon = { Icon(Icons.Default.Refresh, null) })
+                            }
                         }
                     }
                 }
             }
 
-            if (bitrateBps > 0) {
+            if (showChrome && bitrateBps > 0) {
                 Text(
                     formatBitrate(bitrateBps),
                     color = Color.White.copy(0.9f),
@@ -338,19 +435,33 @@ fun LiveControlScreen(
                 )
             }
             // Digital zoom controls on the video edge
-            Column(
-                Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showChrome,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut(),
+                modifier = Modifier.align(Alignment.CenterEnd),
             ) {
-                SmallOverlayBtn(Icons.Default.ZoomIn, "Zoom in") { bumpZoom(1.25f) }
-                SmallOverlayBtn(Icons.Default.ZoomOut, "Zoom out") { bumpZoom(0.8f) }
-                if (scale > 1.01f) {
-                    SmallOverlayBtn(Icons.Default.Close, "Reset zoom") { resetZoom() }
-                }
-                if (!fullscreen) {
-                    SmallOverlayBtn(Icons.Default.Fullscreen, "Fullscreen") { fullscreen = true }
+                Column(
+                    Modifier.padding(end = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SmallOverlayBtn(Icons.Default.ZoomIn, "Zoom in") {
+                        fsChromeVisible = true
+                        bumpZoom(1.25f)
+                    }
+                    SmallOverlayBtn(Icons.Default.ZoomOut, "Zoom out") {
+                        fsChromeVisible = true
+                        bumpZoom(0.8f)
+                    }
+                    if (scale > 1.01f) {
+                        SmallOverlayBtn(Icons.Default.Close, "Reset zoom") {
+                            fsChromeVisible = true
+                            resetZoom()
+                        }
+                    }
+                    if (!fullscreen) {
+                        SmallOverlayBtn(Icons.Default.Fullscreen, "Fullscreen") { fullscreen = true }
+                    }
                 }
             }
 
@@ -392,7 +503,7 @@ fun LiveControlScreen(
                 onTalkRelease = viewModel::stopTalk,
             )
 
-            // —— Tabs: Controls | Recordings ——
+            // —— Tabs: Controls | Recordings | Saved ——
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -402,9 +513,15 @@ fun LiveControlScreen(
             ) {
                 TabChip("Controls", bottomTab == LiveBottomTab.Controls) { bottomTab = LiveBottomTab.Controls }
                 TabChip("Recordings", bottomTab == LiveBottomTab.Recordings) { bottomTab = LiveBottomTab.Recordings }
+                TabChip("Saved", bottomTab == LiveBottomTab.Saved) { bottomTab = LiveBottomTab.Saved }
                 Spacer(Modifier.weight(1f))
                 if (bottomTab == LiveBottomTab.Recordings) {
                     TextButton(onClick = onOpenFullRecordings) { Text("Full timeline", fontSize = 12.sp) }
+                }
+                if (bottomTab == LiveBottomTab.Saved) {
+                    TextButton(onClick = {
+                        localMedia = com.voidnullvalue.icseelocal.storage.LocalMediaLibrary.listAll(context)
+                    }) { Text("Refresh", fontSize = 12.sp) }
                 }
             }
 
@@ -421,6 +538,8 @@ fun LiveControlScreen(
                         speed = speed,
                         cruiseActive = cruiseActive,
                         dayNightMode = dayNightMode,
+                        presetThumbs = presetThumbs,
+                        presetThumbEpoch = presetThumbEpoch,
                         onReconnect = viewModel::reconnect,
                         onPtzDown = viewModel::onPtzDown,
                         onPtzUp = viewModel::onPtzUp,
@@ -440,12 +559,23 @@ fun LiveControlScreen(
                         selectedDay = dmState.selectedRecordingDay,
                         downloading = dmState.downloadingClip,
                         progress = dmState.downloadProgressBytes,
+                        playBuffering = dmState.playBuffering,
                         error = dmState.errorMessage,
                         onRefresh = deviceManagementViewModel::loadAllRecordings,
                         onSelectDay = deviceManagementViewModel::selectRecordingDay,
-                        onClip = { clip ->
-                            if (clip.isDownloaded) deviceManagementViewModel.openLocalClip(clip)
-                            else deviceManagementViewModel.downloadClip(clip)
+                        onPlay = deviceManagementViewModel::playClip,
+                        onDownload = deviceManagementViewModel::downloadClip,
+                    )
+                    LiveBottomTab.Saved -> SavedMediaPanel(
+                        items = localMedia,
+                        onOpen = { item ->
+                            if (item.isVideo) {
+                                localMediaImageUri = null
+                                localMediaPlayUri = item.uri
+                            } else {
+                                localMediaPlayUri = null
+                                localMediaImageUri = item.uri
+                            }
                         },
                     )
                 }
@@ -453,8 +583,28 @@ fun LiveControlScreen(
         }
     }
 
-    dmState.playUri?.let { uri ->
-        LocalPlayerDialog(uri = uri, onDismiss = deviceManagementViewModel::clearPlayUri)
+    if (dmState.playBuffering || dmState.playUri != null || dmState.playError != null) {
+        com.voidnullvalue.icseelocal.ui.devicemanagement.ClipPlayerDialog(
+            uri = dmState.playUri,
+            buffering = dmState.playBuffering,
+            progressBytes = dmState.playProgressBytes,
+            title = dmState.playTitle,
+            error = dmState.playError,
+            onDismiss = deviceManagementViewModel::clearPlayUri,
+        )
+    }
+    localMediaPlayUri?.let { uri ->
+        com.voidnullvalue.icseelocal.ui.devicemanagement.ClipPlayerDialog(
+            uri = uri,
+            buffering = false,
+            progressBytes = 0,
+            title = "Saved video",
+            error = null,
+            onDismiss = { localMediaPlayUri = null },
+        )
+    }
+    localMediaImageUri?.let { uri ->
+        SavedImageDialog(uri = uri, onDismiss = { localMediaImageUri = null })
     }
 
     if (danceModeTriggered) {
@@ -535,6 +685,8 @@ private fun ControlsPanel(
     speed: Int,
     cruiseActive: Boolean,
     dayNightMode: Int,
+    presetThumbs: Map<Int, String>,
+    presetThumbEpoch: Long,
     onReconnect: () -> Unit,
     onPtzDown: (PtzCommand) -> Unit,
     onPtzUp: () -> Unit,
@@ -581,7 +733,7 @@ private fun ControlsPanel(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CompactPresets(onGotoPreset, onSavePreset)
+            CompactPresets(presetThumbs, presetThumbEpoch, onGotoPreset, onSavePreset)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 MiniToggle(
                     icon = Icons.Default.Repeat,
@@ -624,34 +776,46 @@ private fun CompactPtzPad(
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            PtzPadButton(Icons.Default.NorthWest, "Up-left", { onDown(PtzCommand.DIRECTION_RIGHT_UP) }, onUp, onCancel)
+            PtzPadButton(Icons.Default.NorthWest, "Up-left", { onDown(PtzCommand.DIRECTION_LEFT_UP) }, onUp, onCancel)
             PtzPadButton(Icons.Default.North, "Up", { onDown(PtzCommand.DIRECTION_UP) }, onUp, onCancel)
-            PtzPadButton(Icons.Default.NorthEast, "Up-right", { onDown(PtzCommand.DIRECTION_LEFT_UP) }, onUp, onCancel)
+            PtzPadButton(Icons.Default.NorthEast, "Up-right", { onDown(PtzCommand.DIRECTION_RIGHT_UP) }, onUp, onCancel)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            PtzPadButton(Icons.Default.West, "Left", { onDown(PtzCommand.DIRECTION_RIGHT) }, onUp, onCancel)
+            PtzPadButton(Icons.Default.West, "Left", { onDown(PtzCommand.DIRECTION_LEFT) }, onUp, onCancel)
             PtzPadButton(Icons.Default.Stop, "Stop", onUp, onUp, onUp)
-            PtzPadButton(Icons.Default.East, "Right", { onDown(PtzCommand.DIRECTION_LEFT) }, onUp, onCancel)
+            PtzPadButton(Icons.Default.East, "Right", { onDown(PtzCommand.DIRECTION_RIGHT) }, onUp, onCancel)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            PtzPadButton(Icons.Default.SouthWest, "Down-left", { onDown(PtzCommand.DIRECTION_RIGHT_DOWN) }, onUp, onCancel)
+            PtzPadButton(Icons.Default.SouthWest, "Down-left", { onDown(PtzCommand.DIRECTION_LEFT_DOWN) }, onUp, onCancel)
             PtzPadButton(Icons.Default.South, "Down", { onDown(PtzCommand.DIRECTION_DOWN) }, onUp, onCancel)
-            PtzPadButton(Icons.Default.SouthEast, "Down-right", { onDown(PtzCommand.DIRECTION_LEFT_DOWN) }, onUp, onCancel)
+            PtzPadButton(Icons.Default.SouthEast, "Down-right", { onDown(PtzCommand.DIRECTION_RIGHT_DOWN) }, onUp, onCancel)
         }
     }
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun CompactPresets(onGoto: (Int) -> Unit, onSave: (Int) -> Unit) {
+private fun CompactPresets(
+    thumbs: Map<Int, String>,
+    thumbEpoch: Long,
+    onGoto: (Int) -> Unit,
+    onSave: (Int) -> Unit,
+) {
     val haptics = LocalHapticFeedback.current
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         (1..4).forEach { n ->
+            val path = thumbs[n]
+            val bmp = remember(path, thumbEpoch) {
+                path?.let { p ->
+                    val f = File(p)
+                    if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
+                }
+            }
             Box(
                 Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF1A1F26))
                     .combinedClickable(
                         onClick = { onGoto(n) },
                         onLongClick = {
@@ -661,7 +825,23 @@ private fun CompactPresets(onGoto: (Int) -> Unit, onSave: (Int) -> Unit) {
                     ),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("$n", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                if (bmp != null) {
+                    Image(
+                        bitmap = bmp,
+                        contentDescription = "Favourite $n",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Image(
+                        painter = androidx.compose.ui.res.painterResource(
+                            id = com.voidnullvalue.icseelocal.R.drawable.ic_preset_placeholder,
+                        ),
+                        contentDescription = "Empty favourite $n — long-press to save",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
             }
         }
     }
@@ -675,17 +855,20 @@ private fun LiveRecordingsPanel(
     selectedDay: String?,
     downloading: String?,
     progress: Long,
+    playBuffering: Boolean,
     error: String?,
     onRefresh: () -> Unit,
     onSelectDay: (String) -> Unit,
-    onClip: (RecordedFile) -> Unit,
+    onPlay: (RecordedFile) -> Unit,
+    onDownload: (RecordedFile) -> Unit,
 ) {
     val all = clips.orEmpty()
     val dayKeys = remember(all) { all.map { it.dayKey }.distinct().sortedDescending() }
     val day = selectedDay ?: dayKeys.firstOrNull()
     val dayClips = remember(all, day) {
-        all.filter { it.dayKey == day }.sortedByDescending { it.beginTime }
+        all.filter { it.dayKey == day }.sortedByDescending { it.endTime.ifBlank { it.beginTime } }
     }
+    val busy = downloading != null || playBuffering
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -716,6 +899,20 @@ private fun LiveRecordingsPanel(
             }
         }
 
+        if (day != null && dayClips.isNotEmpty()) {
+            RecordingDayTimeline(
+                day = day,
+                clips = dayClips,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                onClipClick = onPlay,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+
         when {
             querying && clips == null -> CircularProgressIndicator(Modifier.padding(top = 16.dp).align(Alignment.CenterHorizontally))
             dayClips.isEmpty() -> Text(
@@ -729,7 +926,9 @@ private fun LiveRecordingsPanel(
                         clip = clip,
                         downloading = downloading == clip.fileName,
                         progress = if (downloading == clip.fileName) progress else 0,
-                        onClick = { onClip(clip) },
+                        busy = busy,
+                        onPlay = { onPlay(clip) },
+                        onDownload = { onDownload(clip) },
                     )
                 }
             }
@@ -759,68 +958,87 @@ private fun LiveClipRow(
     clip: RecordedFile,
     downloading: Boolean,
     progress: Long,
-    onClick: () -> Unit,
+    busy: Boolean,
+    onPlay: () -> Unit,
+    onDownload: () -> Unit,
 ) {
-    val activityColor = if (clip.hasActivity) Color(0xFFFFB77C) else MaterialTheme.colorScheme.onSurfaceVariant
+    val activityGreen = Color(0xFF22C55E)
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
-            .combinedClickable(onClick = onClick)
-            .padding(8.dp),
+            .combinedClickable(enabled = !busy || downloading, onClick = onPlay),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val bmp = remember(clip.thumbPath) {
-            clip.thumbPath?.let { p ->
-                val f = File(p)
-                if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
-            }
-        }
         Box(
             Modifier
-                .size(72.dp, 44.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center,
+                .width(4.dp)
+                .height(60.dp)
+                .background(if (clip.hasActivity) activityGreen else Color(0xFF38BDF8).copy(alpha = 0.45f)),
+        )
+        Row(
+            Modifier
+                .weight(1f)
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (bmp != null) {
-                Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            } else {
-                Icon(
-                    if (clip.hasActivity) Icons.Default.Sensors else Icons.Default.Videocam,
-                    null,
-                    Modifier.size(18.dp),
-                    tint = activityColor,
-                )
+            val bmp = remember(clip.thumbPath) {
+                clip.thumbPath?.let { p ->
+                    val f = File(p)
+                    if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
+                }
             }
-        }
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(clip.beginTime.substringAfter(' ', clip.beginTime), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    clip.activityLabel,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = activityColor,
-                )
-                Text("·", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    when {
-                        downloading -> "%.1f MB…".format(progress / 1e6)
-                        clip.isDownloaded -> "On device"
-                        else -> "On camera"
-                    },
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Box(
+                Modifier
+                    .size(72.dp, 44.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (bmp != null) {
+                    Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                } else {
+                    Icon(
+                        if (clip.hasActivity) Icons.Default.Sensors else Icons.Default.Videocam,
+                        null,
+                        Modifier.size(18.dp),
+                        tint = if (clip.hasActivity) activityGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-        }
-        when {
-            downloading -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            clip.isDownloaded -> Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
-            else -> Icon(Icons.Default.CloudDownload, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(clip.beginTime.substringAfter(' ', clip.beginTime), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        clip.activityLabel,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (clip.hasActivity) activityGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("·", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        when {
+                            downloading -> "%.1f MB…".format(progress / 1e6)
+                            clip.isDownloaded -> "On device"
+                            else -> "On camera"
+                        },
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            if (!clip.isDownloaded) {
+                IconButton(onClick = onDownload, enabled = !busy || downloading) {
+                    if (downloading) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.CloudDownload, "Download", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
         }
     }
 }
@@ -832,6 +1050,118 @@ private fun recordingDayLabel(day: String): String {
         today -> "Today"
         today.minusDays(1) -> "Yesterday"
         else -> parsed.format(java.time.format.DateTimeFormatter.ofPattern("EEE MMM d"))
+    }
+}
+
+@Composable
+private fun SavedMediaPanel(
+    items: List<com.voidnullvalue.icseelocal.storage.LocalMediaItem>,
+    onOpen: (com.voidnullvalue.icseelocal.storage.LocalMediaItem) -> Unit,
+) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Text("Screenshots & downloads", fontWeight = FontWeight.SemiBold)
+        Text(
+            "From Pictures/Movies → iCSeeLocalControl",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        if (items.isEmpty()) {
+            Text("No saved media yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
+                items(items, key = { it.uri }) { item ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                            .clickable { onOpen(item) }
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                if (item.isVideo) Icons.Default.Videocam else Icons.Default.CameraAlt,
+                                null,
+                                Modifier.size(22.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(item.displayName, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                            Text(
+                                if (item.isVideo) "Video" else "Screenshot",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(
+                            if (item.isVideo) Icons.Default.PlayArrow else Icons.Default.Fullscreen,
+                            null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedImageDialog(uri: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val bitmap = remember(uri) {
+        runCatching {
+            val parsed = android.net.Uri.parse(uri)
+            if (uri.startsWith("content:")) {
+                context.contentResolver.openInputStream(parsed)?.use { android.graphics.BitmapFactory.decodeStream(it) }
+            } else {
+                val path = parsed.path ?: uri.removePrefix("file://")
+                android.graphics.BitmapFactory.decodeFile(path)
+            }?.asImageBitmap()
+        }.getOrNull()
+    }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .clickable(onClick = onDismiss),
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = "Screenshot",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(12.dp),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                Text(
+                    "Couldn’t open image",
+                    color = Color.White,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .clip(CircleShape)
+                    .background(OverlayBg),
+            ) {
+                Icon(Icons.Default.Close, "Close", tint = Color.White)
+            }
+        }
     }
 }
 
@@ -975,34 +1305,6 @@ private fun VideoSurface(viewModel: LiveControlViewModel, rtspState: RtspPlayerS
                 },
                 color = Color.White.copy(0.7f),
             )
-        }
-    }
-}
-
-@UnstableApi
-@Composable
-private fun LocalPlayerDialog(uri: String, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val player = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(uri))
-            prepare()
-            playWhenReady = true
-        }
-    }
-    DisposableEffect(Unit) { onDispose { player.release() } }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
-            AndroidView(
-                factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true } },
-                modifier = Modifier.fillMaxSize(),
-            )
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp).clip(CircleShape).background(OverlayBg),
-            ) {
-                Icon(Icons.Default.Close, "Close", tint = Color.White)
-            }
         }
     }
 }

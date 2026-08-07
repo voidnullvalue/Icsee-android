@@ -140,6 +140,77 @@ class RecordedClipExporter(
         return outFile
     }
 
+    /**
+     * Streams a clip for in-app playback (cache only — not gallery).
+     * Remuxes as soon as enough of the HEVC stream is parseable and invokes
+     * [onEarlyMp4] so the player can start while the rest is still arriving.
+     * Returns the final full remux when the camera finishes sending.
+     */
+    suspend fun streamForPlayback(
+        fileName: String,
+        begin: String,
+        end: String,
+        cacheDir: File,
+        onProgress: (Long) -> Unit = {},
+        onEarlyMp4: (File) -> Unit = {},
+    ): File = coroutineScope {
+        cacheDir.mkdirs()
+        val collected = ByteArrayOutputStream()
+        var earlySent = false
+        var nextTryAt = EARLY_PLAY_MIN_BYTES
+        val job = async(start = CoroutineStart.UNDISPATCHED) {
+            var lastReport = 0L
+            transport.incomingFrames
+                .takeWhile { it.header.payloadLength > 0 }
+                .filter { frame ->
+                    val p = frame.payload
+                    if (p.isEmpty()) return@filter false
+                    if (p[0] == '{'.code.toByte()) return@filter false
+                    frame.header.messageId == PB_DATA ||
+                        (p.size >= 4 && p[0] == 0.toByte() && p[1] == 0.toByte() && p[2] == 1.toByte())
+                }
+                .collect {
+                    collected.write(it.payload)
+                    val size = collected.size().toLong()
+                    val now = System.currentTimeMillis()
+                    if (now - lastReport >= 200) {
+                        onProgress(size)
+                        lastReport = now
+                    }
+                    if (!earlySent && size >= nextTryAt) {
+                        val snap = collected.toByteArray()
+                        val early = File(cacheDir, "play_early_${System.currentTimeMillis()}.mp4")
+                        val ok = runCatching {
+                            XmHevcMuxer.writeMp4(snap, early)
+                            early.length() > 0
+                        }.getOrDefault(false)
+                        if (ok) {
+                            earlySent = true
+                            onEarlyMp4(early)
+                        } else {
+                            runCatching { early.delete() }
+                            nextTryAt = size + EARLY_PLAY_RETRY_BYTES
+                        }
+                    }
+                }
+            onProgress(collected.size().toLong())
+            collected.toByteArray()
+        }
+        commandChannel.sendJson(PB_CLAIM, body("Claim", fileName, begin, end))
+        commandChannel.sendJson(PB_CTRL, body("DownloadStart", fileName, begin, end))
+        val raw = try {
+            withTimeout(DOWNLOAD_TIMEOUT_MS) { job.await() }
+        } finally {
+            runCatching { commandChannel.sendJson(PB_CTRL, body("DownloadStop", fileName, begin, end)) }
+        }
+        require(raw.isNotEmpty()) { "empty stream for playback" }
+        val finalFile = File(cacheDir, "play_full_${System.currentTimeMillis()}.mp4")
+        XmHevcMuxer.writeMp4(raw, finalFile)
+        require(finalFile.exists() && finalFile.length() > 0) { "remux produced empty file" }
+        if (!earlySent) onEarlyMp4(finalFile)
+        finalFile
+    }
+
     companion object {
         const val PB_CLAIM = 1424
         const val PB_CTRL = 1420
@@ -148,6 +219,10 @@ class RecordedClipExporter(
         private const val THUMB_TIMEOUT_MS = 25_000L
         /** ~first GOP; enough for SPS + IDR on typical XM clips. */
         const val THUMB_PREFIX_BYTES = 768_000L
+        /** First attempt at an early playable remux. */
+        const val EARLY_PLAY_MIN_BYTES = 400_000L
+        /** Retry interval when early remux fails (SPS/IDR not yet present). */
+        const val EARLY_PLAY_RETRY_BYTES = 300_000L
     }
 }
 

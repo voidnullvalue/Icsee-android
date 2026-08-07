@@ -24,6 +24,7 @@ import com.voidnullvalue.icseelocal.ptz.PtzController
 import com.voidnullvalue.icseelocal.session.CameraCredentials
 import com.voidnullvalue.icseelocal.session.CameraSessionManager
 import com.voidnullvalue.icseelocal.storage.CameraStore
+import com.voidnullvalue.icseelocal.storage.PresetThumbStore
 import com.voidnullvalue.icseelocal.video.LiveStreamRecorder
 import com.voidnullvalue.icseelocal.video.RecordedVideoStore
 import com.voidnullvalue.icseelocal.video.RtspPlayerState
@@ -35,12 +36,14 @@ import com.voidnullvalue.icseelocal.video.VideoStats
 import com.voidnullvalue.icseelocal.video.VideoStreamController
 import java.io.File
 import java.lang.ref.WeakReference
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -50,6 +53,7 @@ import kotlinx.serialization.json.put
 
 class LiveControlViewModel(application: Application) : AndroidViewModel(application), DefaultLifecycleObserver {
     private val store = CameraStore(application)
+    private val presetThumbs = PresetThumbStore(application)
     private val microphone = MicrophoneSource(application)
     // The app-wide session owner. This ViewModel no longer creates or shuts down
     // CameraSessionManagers -- it acquires the shared one for the camera it's showing
@@ -108,7 +112,7 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private val _speedStep = MutableStateFlow(2)
+    private val _speedStep = MutableStateFlow(7)
     val speedStep: StateFlow<Int> = _speedStep.asStateFlow()
 
     private val _talking = MutableStateFlow(false)
@@ -142,6 +146,13 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
 
     private val _recordElapsedMs = MutableStateFlow(0L)
     val recordElapsedMs: StateFlow<Long> = _recordElapsedMs.asStateFlow()
+
+    /** Local JPEG paths for PTZ presets 1–4 (last frame when the preset was saved). */
+    private val _presetThumbPaths = MutableStateFlow<Map<Int, String>>(emptyMap())
+    val presetThumbPaths: StateFlow<Map<Int, String>> = _presetThumbPaths.asStateFlow()
+    /** Bumps when a preset thumb is rewritten so Compose reloads the JPEG. */
+    private val _presetThumbEpoch = MutableStateFlow(0L)
+    val presetThumbEpoch: StateFlow<Long> = _presetThumbEpoch.asStateFlow()
 
     private var liveRecorder: LiveStreamRecorder? = null
     private var recordOutFile: File? = null
@@ -475,6 +486,7 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
                 releaseSession()
 
                 _camera.value = found
+                _presetThumbPaths.value = presetThumbs.forCamera(found.id)
                 val credentials = try {
                     store.credentialsFor(cameraId) ?: CameraCredentials("", "")
                 } catch (e: Exception) {
@@ -600,7 +612,78 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     fun onPtzUp() = ptzController?.onPointerUp()
     fun onPtzCancel() = ptzController?.onPointerCancel()
     fun onPtzDirectionChange(command: PtzCommand) = ptzController?.onDirectionChange(command, _speedStep.value)
-    fun setPreset(preset: Int) = ptzController?.setPreset(preset)
+
+    /**
+     * Saves PTZ preset [preset] and captures the current live frame as its
+     * thumbnail (shown on the 1–4 favourite buttons).
+     */
+    @UnstableApi
+    fun setPreset(preset: Int) {
+        ptzController?.setPreset(preset)
+        val cameraId = _camera.value?.id ?: return
+        val view = playerViewRef?.get() ?: run {
+            _statusToast.value = "Preset $preset saved (no frame for thumb)"
+            return
+        }
+        viewModelScope.launch {
+            val path = capturePresetThumb(view, cameraId, preset)
+            if (path != null) {
+                presetThumbs.put(cameraId, preset, path)
+                _presetThumbPaths.value = _presetThumbPaths.value + (preset to path)
+                _presetThumbEpoch.value = System.currentTimeMillis()
+                _statusToast.value = "Favourite saved"
+            } else {
+                _statusToast.value = "Favourite saved (couldn’t capture frame)"
+            }
+        }
+    }
+
+    @UnstableApi
+    private suspend fun capturePresetThumb(view: androidx.media3.ui.PlayerView, cameraId: String, preset: Int): String? {
+        val out = presetThumbs.thumbFile(cameraId, preset)
+        return try {
+            val texture = findTextureView(view)
+            val bmp = texture?.bitmap
+            if (bmp != null) {
+                withContext(Dispatchers.IO) {
+                    java.io.FileOutputStream(out).use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, it) }
+                }
+                bmp.recycle()
+                out.absolutePath
+            } else {
+                val surface = findSurfaceView(view) ?: return null
+                copySurfaceToFile(surface, out)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun copySurfaceToFile(surfaceView: android.view.SurfaceView, out: File): String? {
+        if (surfaceView.width <= 0 || surfaceView.height <= 0) return null
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            surfaceView.width, surfaceView.height, android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val thread = android.os.HandlerThread("preset-thumb").also { it.start() }
+        val handler = android.os.Handler(thread.looper)
+        try {
+            android.view.PixelCopy.request(
+                surfaceView, bitmap,
+                { result -> deferred.complete(result == android.view.PixelCopy.SUCCESS) },
+                handler,
+            )
+            if (!deferred.await()) return null
+            withContext(Dispatchers.IO) {
+                java.io.FileOutputStream(out).use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, it) }
+            }
+            return out.absolutePath
+        } finally {
+            bitmap.recycle()
+            thread.quitSafely()
+        }
+    }
+
     fun gotoPreset(preset: Int) = ptzController?.gotoPreset(preset)
     fun clearPreset(preset: Int) = ptzController?.clearPreset(preset)
     fun startTour() = ptzController?.startTour()

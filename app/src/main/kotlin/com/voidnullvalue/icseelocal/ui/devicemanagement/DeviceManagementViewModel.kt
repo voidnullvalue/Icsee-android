@@ -157,7 +157,13 @@ data class DeviceManagementUiState(
     val downloadProgressBytes: Long = 0,
     val savedVideoUri: String? = null,
     val savedVideoLabel: String? = null,
+    /** Local or cache file URI currently open in the in-app player. */
     val playUri: String? = null,
+    /** True while streaming a remote clip into the player (not a gallery download). */
+    val playBuffering: Boolean = false,
+    val playProgressBytes: Long = 0,
+    val playTitle: String? = null,
+    val playError: String? = null,
     val accounts: List<DeviceAccount>? = null,
     val accountsQuerying: Boolean = false,
 )
@@ -186,6 +192,8 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
     /** Serializes SD-card Claim/Download so thumb prefetch never races a full download. */
     private val sdDownloadMutex = Mutex()
     private var thumbPrefetchJob: Job? = null
+    private var streamPlayJob: Job? = null
+    private var earlyPlayFile: File? = null
 
     private val _state = MutableStateFlow(DeviceManagementUiState())
     val state: StateFlow<DeviceManagementUiState> = _state.asStateFlow()
@@ -635,7 +643,7 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                     all += files
                     if (diag != null) lastDiag = diag
                 }
-                all.sortByDescending { it.beginTime }
+                all.sortByDescending { it.endTime.ifBlank { it.beginTime } }
                 val cameraId = camera?.id ?: ""
                 val local = recordingIndex.all().filter { it.cameraId == cameraId }
                 val merged = all.map { clip ->
@@ -672,29 +680,87 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
         ch: Int,
         date: String,
     ): Pair<List<RecordedFile>, String?> {
-        val json = buildJsonObject {
-            put("Name", "OPFileQuery")
-            put("OPFileQuery", buildJsonObject {
-                put("BeginTime", "$date 00:00:00")
-                put("EndTime", "$date 23:59:59")
-                put("Channel", ch)
-                put("DriverTypeMask", "0x0000FFFF")
-                // Event="*" is REQUIRED -- omitting it returns Ret:119 (live-confirmed).
-                put("Event", "*")
-                put("Type", "h264")
-                put("StreamType", "0x00000000")
-            })
-            put("SessionID", "0x%08x".format(sid.toLong()))
-        }.toString()
-        val text = sendAndAwait(transport, channel, DvripMessageIds.FILE_QUERY, DvripMessageIds.FILE_QUERY + 1, json, timeoutMillis = 15000)
-        val files = text?.let { parseRecordings(it) } ?: emptyList()
-        val ret = text?.let { Regex("\"Ret\"\\s*:\\s*(\\d+)").find(it)?.groupValues?.get(1) }
-        val diag = when {
-            text == null -> "No response from camera (timeout)."
-            files.isEmpty() && ret != null && ret != "100" -> "Camera rejected the query (Ret=$ret)."
-            else -> null
+        // Prefer h264 (this firmware's Type label); fall back to h265 if empty.
+        val (h264, diag264) = queryDayPaged(transport, channel, sid, ch, date, type = "h264")
+        if (h264.isNotEmpty()) return h264 to diag264
+        val (h265, diag265) = queryDayPaged(transport, channel, sid, ch, date, type = "h265")
+        if (h265.isNotEmpty()) return h265 to diag265
+        return emptyList<RecordedFile>() to (diag264 ?: diag265)
+    }
+
+    /**
+     * OPFileQuery returns at most 64 clips per response (OpenIPC/python-dvr).
+     * Continuous recording often packs ~64 clips into ~12 hours, which looked
+     * like the timeline was truncated — page by bumping BeginTime to the last
+     * clip until a short page arrives.
+     */
+    private suspend fun queryDayPaged(
+        transport: DvripTransport,
+        channel: DvripCommandChannel,
+        sid: UInt,
+        ch: Int,
+        date: String,
+        type: String,
+    ): Pair<List<RecordedFile>, String?> {
+        val dayEnd = "$date 23:59:59"
+        var begin = "$date 00:00:00"
+        val all = ArrayList<RecordedFile>()
+        val seen = HashSet<String>()
+        var lastDiag: String? = null
+        var pages = 0
+        while (pages < MAX_FILE_QUERY_PAGES) {
+            pages++
+            val json = buildJsonObject {
+                put("Name", "OPFileQuery")
+                put("OPFileQuery", buildJsonObject {
+                    put("BeginTime", begin)
+                    put("EndTime", dayEnd)
+                    put("Channel", ch)
+                    put("DriverTypeMask", "0x0000FFFF")
+                    // Event="*" is REQUIRED -- omitting it returns Ret:119 (live-confirmed).
+                    put("Event", "*")
+                    put("Type", type)
+                    put("StreamType", "0x00000000")
+                })
+                put("SessionID", "0x%08x".format(sid.toLong()))
+            }.toString()
+            val text = sendAndAwait(transport, channel, DvripMessageIds.FILE_QUERY, DvripMessageIds.FILE_QUERY + 1, json, timeoutMillis = 15000)
+            val page = text?.let { parseRecordings(it) } ?: emptyList()
+            val ret = text?.let { Regex("\"Ret\"\\s*:\\s*(\\d+)").find(it)?.groupValues?.get(1) }
+            if (text == null) {
+                lastDiag = "No response from camera (timeout)."
+                break
+            }
+            if (page.isEmpty()) {
+                if (ret != null && ret != "100" && all.isEmpty()) {
+                    lastDiag = "Camera rejected the query (Ret=$ret)."
+                }
+                break
+            }
+            var added = 0
+            for (clip in page) {
+                val key = clip.fileName + "|" + clip.beginTime
+                if (seen.add(key)) {
+                    all += clip
+                    added++
+                }
+            }
+            // Full page → more clips likely exist after the last BeginTime.
+            if (page.size < FILE_QUERY_PAGE_SIZE) break
+            val nextBegin = page.last().beginTime
+            if (nextBegin.isBlank() || nextBegin <= begin) break
+            // Avoid a tight loop if the camera keeps returning the same page.
+            if (added == 0) break
+            begin = nextBegin
         }
-        return files to diag
+        return all to lastDiag
+    }
+
+    companion object {
+        /** Firmware hard limit per OPFileQuery response (OpenIPC/python-dvr). */
+        private const val FILE_QUERY_PAGE_SIZE = 64
+        /** Safety cap: 64 × 40 ≈ 2560 clips/day. */
+        private const val MAX_FILE_QUERY_PAGES = 40
     }
 
     /** Extracts the list of days ("yyyy-MM-dd") spanned by the recorded data in a StorageInfo reply. */
@@ -769,7 +835,7 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
             val cameraId = camera?.id ?: return@launch
             val pending = _state.value.recordings.orEmpty()
                 .filter { it.dayKey == day && it.thumbPath.isNullOrBlank() }
-                .sortedByDescending { it.beginTime }
+                .sortedByDescending { it.endTime.ifBlank { it.beginTime } }
                 .take(24)
             for (clip in pending) {
                 ensureActive()
@@ -861,25 +927,140 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
 
     fun openLocalClip(clip: RecordedFile) {
         val uri = clip.localUri ?: return
-        _state.value = _state.value.copy(playUri = uri)
-    }
-
-    fun clearPlayUri() {
-        _state.value = _state.value.copy(playUri = null)
+        _state.value = _state.value.copy(
+            playUri = uri,
+            playBuffering = false,
+            playProgressBytes = 0,
+            playTitle = clip.beginTime,
+            playError = null,
+        )
     }
 
     /**
-     * Downloads [clip] off the SD card (DVRIP OPPlayBack), remuxes the XM-framed
-     * HEVC to a standard MP4, and saves it into the device's Movies collection so
-     * it's a normal downloaded video the user can open/share in any player. The
-     * saved URI is exposed via [DeviceManagementUiState.savedVideoUri]. Saving to
-     * a real player (rather than decoding the 6 MP HEVC in-app) keeps the UI
-     * responsive. See [RecordedClipExporter]/[RecordedVideoStore]; protocol
-     * live-confirmed 2026-07-09.
+     * Opens the in-app player. Uses a local file when already downloaded; otherwise
+     * streams from the SD card into a cache MP4 (does **not** save to the gallery).
+     */
+    fun playClip(clip: RecordedFile) {
+        if (clip.isDownloaded) {
+            openLocalClip(clip)
+            return
+        }
+        val manager = sessionManager
+        val transport = manager?.controlTransport
+        val channel = manager?.commandChannel
+        val sid = (manager?.state?.value as? ConnectionState.Authenticated)?.sessionId
+        if (manager == null || transport == null || channel == null || sid == null) {
+            _state.value = _state.value.copy(
+                playBuffering = false,
+                playError = "Camera session not ready — open live view first, then try again.",
+                playTitle = clip.beginTime,
+            )
+            return
+        }
+        if (clip.fileName.isBlank()) {
+            _state.value = _state.value.copy(playError = "Clip has no file name")
+            return
+        }
+        if (_state.value.downloadingClip != null) {
+            _state.value = _state.value.copy(playError = "Wait for the download to finish, then play.")
+            return
+        }
+
+        thumbPrefetchJob?.cancel()
+        streamPlayJob?.cancel()
+        earlyPlayFile?.delete()
+        earlyPlayFile = null
+
+        _state.value = _state.value.copy(
+            playUri = null,
+            playBuffering = true,
+            playProgressBytes = 0,
+            playTitle = clip.beginTime,
+            playError = null,
+        )
+
+        streamPlayJob = viewModelScope.launch {
+            try {
+                val finalFile = withContext(Dispatchers.IO) {
+                    sdDownloadMutex.withLock {
+                        val app = getApplication<Application>()
+                        val cache = File(app.cacheDir, "clip_stream").also { it.mkdirs() }
+                        cache.listFiles()?.forEach { runCatching { it.delete() } }
+                        val exporter = RecordedClipExporter(transport, channel, sid)
+                        exporter.streamForPlayback(
+                            fileName = clip.fileName,
+                            begin = clip.beginTime,
+                            end = clip.endTime,
+                            cacheDir = cache,
+                            onProgress = { bytes ->
+                                _state.value = _state.value.copy(playProgressBytes = bytes)
+                            },
+                            onEarlyMp4 = { early ->
+                                // Start the player ASAP; keep playBuffering=true until the
+                                // full remux lands so the UI can show stream progress.
+                                earlyPlayFile = early
+                                _state.value = _state.value.copy(
+                                    playUri = android.net.Uri.fromFile(early).toString(),
+                                    playBuffering = true,
+                                    playError = null,
+                                )
+                            },
+                        )
+                    }
+                }
+                // Swap to the complete remux when ready (keep playing position via dialog).
+                if (earlyPlayFile?.absolutePath != finalFile.absolutePath) {
+                    val old = earlyPlayFile
+                    earlyPlayFile = finalFile
+                    _state.value = _state.value.copy(
+                        playUri = android.net.Uri.fromFile(finalFile).toString(),
+                        playBuffering = false,
+                        playError = null,
+                    )
+                    // Delay delete so ExoPlayer can release the early MediaItem.
+                    kotlinx.coroutines.delay(1500)
+                    runCatching { old?.delete() }
+                } else {
+                    earlyPlayFile = finalFile
+                    _state.value = _state.value.copy(
+                        playUri = android.net.Uri.fromFile(finalFile).toString(),
+                        playBuffering = false,
+                    )
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    playBuffering = false,
+                    playError = e.message ?: "Playback failed",
+                )
+            }
+            prefetchThumbsForDay(_state.value.selectedRecordingDay)
+        }
+    }
+
+    fun clearPlayUri() {
+        streamPlayJob?.cancel()
+        streamPlayJob = null
+        // Keep earlyPlayFile on disk until the next play clears the cache dir —
+        // deleting here races ExoPlayer still releasing the previous MediaItem.
+        earlyPlayFile = null
+        _state.value = _state.value.copy(
+            playUri = null,
+            playBuffering = false,
+            playProgressBytes = 0,
+            playTitle = null,
+            playError = null,
+        )
+    }
+
+    /**
+     * Downloads [clip] off the SD card into the device Movies collection.
+     * Does not open the player — use [playClip] for that.
      */
     fun downloadClip(clip: RecordedFile) {
         if (clip.isDownloaded) {
-            openLocalClip(clip)
+            _state.value = _state.value.copy(statusMessage = "Already saved on this device")
             return
         }
         val manager = sessionManager ?: return
@@ -888,7 +1069,12 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
         val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
         if (clip.fileName.isBlank()) return
         val cameraId = camera?.id ?: return
+        if (_state.value.playBuffering) {
+            _state.value = _state.value.copy(errorMessage = "Stop playback first, then download.")
+            return
+        }
         thumbPrefetchJob?.cancel()
+        streamPlayJob?.cancel()
         viewModelScope.launch {
             _state.value = _state.value.copy(
                 downloadingClip = clip.fileName, downloadProgressBytes = 0,
@@ -937,7 +1123,6 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                             savedVideoUri = saved.uri,
                             savedVideoLabel = saved.label,
                             statusMessage = "Saved to ${saved.label}",
-                            playUri = uri,
                         )
                     }
                     is SavedVideo.Failure -> _state.value = _state.value.copy(errorMessage = saved.reason)
