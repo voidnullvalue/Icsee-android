@@ -118,7 +118,7 @@ fun SectionCard(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth().padding(bottom = 12.dp),
-        shape = RoundedCornerShape(20.dp),
+        shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainer,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
@@ -151,7 +151,7 @@ fun NavTile(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
         Row(
@@ -201,7 +201,7 @@ fun GradientButton(
 ) {
     Box(
         modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(MaterialTheme.shapes.medium)
             .then(if (enabled && !busy) Modifier.background(BrandGradient) else Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest))
             .clickable(enabled = enabled && !busy, onClick = onClick)
             .height(48.dp)
@@ -228,7 +228,10 @@ fun GradientButton(
 /** A small colored-dot status pill (connection state, etc.). */
 @Composable
 fun StatusPill(label: String, dot: Color) {
-    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+    ) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
             Spacer(Modifier.width(8.dp))
@@ -237,6 +240,7 @@ fun StatusPill(label: String, dot: Color) {
     }
 }
 
+/** @deprecated Prefer [com.voidnullvalue.icseelocal.ui.theme.StatusColorTokens] via MaterialTheme.statusColors */
 object StatusColors {
     val ok = Color(0xFF34D399)
     val warn = Color(0xFFFFB77C)

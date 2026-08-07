@@ -13,4 +13,5 @@ sealed class Screen {
     data class ImageSettings(val cameraId: String) : Screen()
     data class PlaybackBrowser(val cameraId: String) : Screen()
     data object BlePairing : Screen()
+    data object CameraGrid : Screen()
 }

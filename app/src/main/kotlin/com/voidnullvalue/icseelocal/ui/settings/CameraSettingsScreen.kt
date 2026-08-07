@@ -47,6 +47,7 @@ import com.voidnullvalue.icseelocal.ble.BlePairedCamera
 import com.voidnullvalue.icseelocal.discovery.DiscoveryBeacon
 import com.voidnullvalue.icseelocal.model.StreamType
 import com.voidnullvalue.icseelocal.video.RtspUrlBuilder
+import com.voidnullvalue.icseelocal.video.RtspUrlRedactor
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -184,11 +185,17 @@ fun CameraSettingsScreen(
                 )
                 SelectionContainer {
                     Text(
-                        rtspUrl,
+                        RtspUrlRedactor.redact(rtspUrl),
                         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                         style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     )
                 }
+                Text(
+                    "Password is hidden on screen; Copy URL includes credentials for VLC.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp)) {
                     Button(onClick = { clipboard.setText(AnnotatedString(rtspUrl)); copied = true }) {
                         Text(if (copied) "Copied!" else "Copy URL")

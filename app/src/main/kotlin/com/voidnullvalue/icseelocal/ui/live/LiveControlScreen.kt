@@ -5,7 +5,6 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
-import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -36,7 +35,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -123,29 +121,26 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.voidnullvalue.icseelocal.model.ConnectionState
 import com.voidnullvalue.icseelocal.model.StreamType
 import com.voidnullvalue.icseelocal.ptz.PtzCommand
+import com.voidnullvalue.icseelocal.ui.MainActivity
+import com.voidnullvalue.icseelocal.ui.components.CameraStreamPlayer
+import com.voidnullvalue.icseelocal.ui.components.PlaybackStatusChip
 import com.voidnullvalue.icseelocal.ui.devicemanagement.DeviceManagementViewModel
 import com.voidnullvalue.icseelocal.ui.devicemanagement.RecordedFile
 import com.voidnullvalue.icseelocal.ui.devicemanagement.RecordingDayTimeline
-import com.voidnullvalue.icseelocal.video.RtspPlayerState
+import com.voidnullvalue.icseelocal.video.isOnAir
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private val StatusGreen = Color(0xFF4ADE80)
-private val StatusAmber = Color(0xFFFBBF24)
 private val OverlayBg = Color(0x99000000)
 
 private enum class LiveBottomTab { Controls, Recordings, Saved }
@@ -173,6 +168,7 @@ fun LiveControlScreen(
     val danceModeTriggered by viewModel.danceModeTriggered.collectAsState()
     val muted by viewModel.muted.collectAsState()
     val bitrateBps by viewModel.bitrateBps.collectAsState()
+    val mainStream by viewModel.mainStream.collectAsState()
     val cruiseActive by viewModel.cruiseActive.collectAsState()
     val lightOn by viewModel.lightOn.collectAsState()
     val lightingCaps by viewModel.lightingCaps.collectAsState()
@@ -253,7 +249,7 @@ fun LiveControlScreen(
 
     // Keep the display awake while live video is playing (or fullscreen / clip player open).
     val keepAwake = fullscreen ||
-        rtspState is RtspPlayerState.Playing ||
+        rtspState.isOnAir ||
         dmState.playUri != null ||
         dmState.playBuffering ||
         localMediaPlayUri != null ||
@@ -266,6 +262,12 @@ fun LiveControlScreen(
         onDispose {
             window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+    }
+
+    val mainActivity = activity as? MainActivity
+    DisposableEffect(rtspState.isOnAir) {
+        mainActivity?.setPipEligible(rtspState.isOnAir)
+        onDispose { mainActivity?.setPipEligible(false) }
     }
 
     // Immersive chrome + force landscape in fullscreen. configChanges on the
@@ -325,7 +327,7 @@ fun LiveControlScreen(
                 Column(Modifier.weight(1f)) {
                     Text(camera?.displayName ?: "Live", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, fontSize = 15.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        StatusPill(state, rtspState is RtspPlayerState.Playing)
+                        PlaybackStatusChip(rtspState)
                         if (bitrateBps > 0) {
                             Text(formatBitrate(bitrateBps), color = Color.White.copy(0.7f), fontSize = 11.sp)
                         }
@@ -406,34 +408,38 @@ fun LiveControlScreen(
                         translationY = offset.y
                     },
             ) {
-                VideoSurface(viewModel, rtspState, Modifier.fillMaxSize())
+                CameraStreamPlayer(
+                    exoPlayer = viewModel.rtspPlayer.exoPlayer,
+                    playbackState = rtspState,
+                    modifier = Modifier.fillMaxSize(),
+                    title = if (fullscreen) camera?.displayName else null,
+                    mainStream = mainStream,
+                    muted = muted,
+                    recording = recording,
+                    recordElapsedLabel = if (recording) formatDuration(recordElapsedMs) else null,
+                    bitrateLabel = if (bitrateBps > 0) formatBitrate(bitrateBps) else null,
+                    showOverlay = true,
+                    overlayInitiallyVisible = fullscreen,
+                    fullscreen = fullscreen,
+                    onBindPlayerView = viewModel::bindPlayerView,
+                    onToggleMute = viewModel::toggleMute,
+                    onToggleQuality = {
+                        viewModel.setStreamType(
+                            if (mainStream) StreamType.SUB else StreamType.MAIN,
+                        )
+                    },
+                    onSnapshot = viewModel::takeSnapshot,
+                    onToggleRecording = viewModel::toggleRecording,
+                    onReconnect = viewModel::reconnectRtsp,
+                    onFullscreen = { fullscreen = true },
+                    onExitFullscreen = { resetZoom(); fullscreen = false },
+                    onEnterPip = { mainActivity?.enterPipIfEligible() },
+                    onOverlayVisibilityChanged = { visible -> if (fullscreen) fsChromeVisible = visible },
+                )
             }
 
-            // Fullscreen-only chrome (tap to show/hide) so landscape exit still works.
+            // Legacy fullscreen top chrome removed — CameraStreamPlayer owns overlay.
             if (fullscreen) {
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = fsChromeVisible,
-                    enter = androidx.compose.animation.fadeIn(),
-                    exit = androidx.compose.animation.fadeOut(),
-                    modifier = Modifier.align(Alignment.TopStart),
-                ) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .statusBarsPadding()
-                            .padding(4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(onClick = { resetZoom(); fullscreen = false }) {
-                            Icon(Icons.Default.Close, "Exit fullscreen", tint = Color.White)
-                        }
-                        Text(camera?.displayName ?: "Live", color = Color.White, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.weight(1f))
-                        if (recording) {
-                            Text("REC ${formatDuration(recordElapsedMs)}", color = Color(0xFFFF6B6B), fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
                 statusToast?.let { msg ->
                     Text(
                         msg,
@@ -441,7 +447,7 @@ fun LiveControlScreen(
                         fontSize = 12.sp,
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = 16.dp)
+                            .padding(bottom = 72.dp)
                             .clip(RoundedCornerShape(10.dp))
                             .background(OverlayBg)
                             .padding(horizontal = 12.dp, vertical = 6.dp),
@@ -451,9 +457,9 @@ fun LiveControlScreen(
         }
 
         if (!fullscreen) {
-            // —— Action row directly under stream (zoom / fullscreen live here) ——
+            // —— Action row directly under stream (zoom / talk live here) ——
             StreamActionRow(
-                mainStream = camera?.streamType != StreamType.SUB,
+                mainStream = mainStream,
                 muted = muted,
                 recording = recording,
                 talking = talking,
@@ -461,7 +467,7 @@ fun LiveControlScreen(
                 canResetZoom = scale > 1.01f,
                 onToggleQuality = {
                     viewModel.setStreamType(
-                        if (camera?.streamType == StreamType.MAIN) StreamType.SUB else StreamType.MAIN,
+                        if (mainStream) StreamType.SUB else StreamType.MAIN,
                     )
                 },
                 onToggleMute = viewModel::toggleMute,
@@ -1267,24 +1273,6 @@ private fun SmallOverlayBtn(icon: ImageVector, desc: String, onClick: () -> Unit
     }
 }
 
-@Composable
-private fun StatusPill(state: ConnectionState, playing: Boolean) {
-    val (dot, text) = when {
-        playing -> StatusGreen to "LIVE"
-        state is ConnectionState.Authenticated || state is ConnectionState.Streaming -> StatusGreen to "CONNECTED"
-        state is ConnectionState.Failed || state is ConnectionState.Disconnected -> MaterialTheme.colorScheme.error to "OFFLINE"
-        else -> StatusAmber to state.label.uppercase()
-    }
-    Row(
-        Modifier.clip(CircleShape).background(OverlayBg).padding(horizontal = 8.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        Box(Modifier.size(6.dp).clip(CircleShape).background(dot))
-        Text(text, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
 private fun formatBitrate(bps: Long): String {
     val kbps = bps / 1000.0
     return if (kbps >= 1000) "%.1f Mbps".format(kbps / 1000) else "%.0f kbps".format(kbps)
@@ -1294,53 +1282,6 @@ private fun formatDuration(ms: Long): String {
     val s = (ms / 1000) % 60
     val m = (ms / 1000) / 60
     return "%d:%02d".format(m, s)
-}
-
-@UnstableApi
-@Composable
-private fun VideoSurface(viewModel: LiveControlViewModel, rtspState: RtspPlayerState, modifier: Modifier) {
-    val exoPlayer = viewModel.rtspPlayer.exoPlayer
-    var playerView by remember { mutableStateOf<PlayerView?>(null) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START) {
-                playerView?.let { it.player = null; it.player = exoPlayer }
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            viewModel.bindPlayerView(null)
-        }
-    }
-    Box(modifier, contentAlignment = Alignment.Center) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    player = exoPlayer
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    playerView = this
-                    viewModel.bindPlayerView(this)
-                }
-            },
-            update = { v -> playerView = v; viewModel.bindPlayerView(v) },
-        )
-        if (rtspState !is RtspPlayerState.Playing) {
-            Text(
-                when (val s = rtspState) {
-                    is RtspPlayerState.Idle -> "Idle"
-                    is RtspPlayerState.Connecting -> "Connecting…"
-                    is RtspPlayerState.Error -> "Video error: ${s.message}"
-                    is RtspPlayerState.Playing -> ""
-                },
-                color = Color.White.copy(0.7f),
-            )
-        }
-    }
 }
 
 @UnstableApi

@@ -1,10 +1,17 @@
 package com.voidnullvalue.icseelocal.ui
 
+import android.app.PictureInPictureParams
+import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
+import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.material3.Surface
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.util.UnstableApi
 import com.voidnullvalue.icseelocal.ui.blepairing.BlePairingScreen
@@ -15,6 +22,7 @@ import com.voidnullvalue.icseelocal.ui.devicemanagement.DeviceManagementViewMode
 import com.voidnullvalue.icseelocal.ui.devicemanagement.ImageSettingsScreen
 import com.voidnullvalue.icseelocal.ui.devicemanagement.PlaybackBrowserScreen
 import com.voidnullvalue.icseelocal.ui.diagnostics.DiagnosticsScreen
+import com.voidnullvalue.icseelocal.ui.grid.CameraGridScreen
 import com.voidnullvalue.icseelocal.ui.live.LiveControlScreen
 import com.voidnullvalue.icseelocal.ui.live.LiveControlViewModel
 import com.voidnullvalue.icseelocal.ui.settings.CameraSettingsScreen
@@ -24,14 +32,61 @@ import com.voidnullvalue.icseelocal.ui.theme.IcseeTheme
  * Single-Activity host with an explicit [NavStack] so system back and toolbar
  * back share one pop path. Session families (Live / DeviceManagement) still
  * connect only while a matching screen is on the stack.
+ *
+ * Edge-to-edge + optional PiP when the user backgrounds a live stream.
  */
 class MainActivity : ComponentActivity() {
+
+    @Volatile
+    private var pipEligible: Boolean = false
+
+    fun setPipEligible(eligible: Boolean) {
+        pipEligible = eligible
+        if (Build.VERSION.SDK_INT >= 26) {
+            try {
+                setPictureInPictureParams(buildPipParams())
+            } catch (_: IllegalStateException) {
+                // Activity not ready for PiP params yet (pre-resume / finishing).
+            } catch (_: IllegalArgumentException) {
+                // Device rejected aspect ratio / PiP params.
+            }
+        }
+    }
+
+    private fun buildPipParams(): PictureInPictureParams {
+        return PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(16, 9))
+            .build()
+    }
+
+    fun enterPipIfEligible(): Boolean {
+        if (!pipEligible || Build.VERSION.SDK_INT < 26) return false
+        return try {
+            enterPictureInPictureMode(buildPipParams())
+        } catch (_: IllegalStateException) {
+            false
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        enterPipIfEligible()
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+    }
+
     @UnstableApi
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
             IcseeTheme {
-                Surface {
+                Box(Modifier.fillMaxSize()) {
                     val nav = rememberNavStack()
                     NavBackHandler(nav) { finish() }
 
@@ -73,6 +128,7 @@ class MainActivity : ComponentActivity() {
                     when (val current = screen) {
                         is Screen.CameraList -> CameraListScreen(
                             onOpenCamera = { id -> nav.push(Screen.LiveControl(id)) },
+                            onOpenGrid = { nav.push(Screen.CameraGrid) },
                             onAddManual = { nav.push(Screen.CameraSettings(null)) },
                             onAddDiscovered = { beacon -> nav.push(Screen.CameraSettings(null, prefillBeacon = beacon)) },
                             onPairBluetooth = { nav.push(Screen.BlePairing) },
@@ -126,6 +182,10 @@ class MainActivity : ComponentActivity() {
                         is Screen.BlePairing -> BlePairingScreen(
                             onPaired = { paired -> nav.replaceTop(Screen.CameraSettings(null, prefillBle = paired)) },
                             onCancel = { nav.pop() },
+                        )
+                        is Screen.CameraGrid -> CameraGridScreen(
+                            onOpenLive = { id -> nav.push(Screen.LiveControl(id)) },
+                            onBack = { nav.pop() },
                         )
                     }
                 }

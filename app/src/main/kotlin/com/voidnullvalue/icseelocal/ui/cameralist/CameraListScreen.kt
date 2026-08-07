@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
@@ -49,6 +50,7 @@ import com.voidnullvalue.icseelocal.ui.components.SectionCard
 @Composable
 fun CameraListScreen(
     onOpenCamera: (String) -> Unit,
+    onOpenGrid: () -> Unit,
     onAddManual: () -> Unit,
     onAddDiscovered: (DiscoveryBeacon) -> Unit,
     onPairBluetooth: () -> Unit,
@@ -62,6 +64,11 @@ fun CameraListScreen(
 
     AppScaffold(
         title = "iCSee Local Control",
+        actions = {
+            IconButton(onClick = onOpenGrid, enabled = saved.isNotEmpty()) {
+                Icon(Icons.Default.GridView, contentDescription = "Multi-view grid")
+            }
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = onAddManual, containerColor = MaterialTheme.colorScheme.primaryContainer) {
                 Icon(Icons.Default.Add, contentDescription = "Add camera manually")

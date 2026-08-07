@@ -30,7 +30,7 @@ import com.voidnullvalue.icseelocal.storage.PresetThumbStore
 import com.voidnullvalue.icseelocal.video.LiveStreamRecorder
 import com.voidnullvalue.icseelocal.video.RecordedVideoStore
 import com.voidnullvalue.icseelocal.video.RtspPlayerState
-import com.voidnullvalue.icseelocal.video.RtspVideoPlayer
+import com.voidnullvalue.icseelocal.video.RtspStreamManager
 import com.voidnullvalue.icseelocal.video.SavedVideo
 import com.voidnullvalue.icseelocal.video.SnapshotCapture
 import com.voidnullvalue.icseelocal.video.SnapshotResult
@@ -103,10 +103,13 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     // running for stats/diagnostics -- its media-byte gap is still open,
     // see PROTOCOL_STATUS.md -- but the RTSP player is what's actually shown.
     @UnstableApi
-    val rtspPlayer = RtspVideoPlayer(application)
+    val rtspPlayer = RtspStreamManager(application)
 
     @UnstableApi
     val rtspState: StateFlow<RtspPlayerState> = rtspPlayer.state
+
+    @UnstableApi
+    val mainStream: StateFlow<Boolean> = rtspPlayer.mainStream
 
     private val _camera = MutableStateFlow<CameraDescriptor?>(null)
     val camera: StateFlow<CameraDescriptor?> = _camera.asStateFlow()
@@ -183,6 +186,16 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
 
     @UnstableApi
     fun toggleMute() = rtspPlayer.toggleMute()
+
+    @UnstableApi
+    fun toggleStreamQuality() {
+        val found = _camera.value ?: return
+        val nextMain = !rtspPlayer.mainStream.value
+        setStreamType(if (nextMain) StreamType.MAIN else StreamType.SUB)
+    }
+
+    @UnstableApi
+    fun reconnectRtsp() = rtspPlayer.reconnect()
 
     @UnstableApi
     fun setStreamType(type: StreamType) {

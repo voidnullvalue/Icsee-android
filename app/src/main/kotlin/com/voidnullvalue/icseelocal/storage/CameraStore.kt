@@ -96,6 +96,21 @@ class CameraStore(
         }
     }
 
+    /**
+     * Persists a new camera order. [orderedIds] should contain every saved camera id;
+     * unknown ids are ignored, and any stored cameras missing from the list are
+     * appended at the end so nothing is silently dropped.
+     */
+    suspend fun reorder(orderedIds: List<String>) {
+        context.cameraDataStore.edit { prefs ->
+            val current = readStoredList(prefs[listKey])
+            val byId = current.associateBy { it.id }
+            val reordered = orderedIds.mapNotNull { byId[it] }
+            val remainder = current.filterNot { it.id in orderedIds.toSet() }
+            prefs[listKey] = json.encodeToString(reordered + remainder)
+        }
+    }
+
     /** Decrypts credentials on demand -- never held in the in-memory camera list. */
     suspend fun credentialsFor(id: String): CameraCredentials? {
         val prefs = context.cameraDataStore.data.first()
