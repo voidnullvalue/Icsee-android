@@ -58,9 +58,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import java.io.File
 import java.time.LocalDate
@@ -350,23 +348,14 @@ fun ClipPlayerDialog(
     val context = LocalContext.current
     var playerError by remember { mutableStateOf<String?>(null) }
     val player = remember {
-        val renderers = androidx.media3.exoplayer.DefaultRenderersFactory(context)
-            .setEnableDecoderFallback(true)
-        ExoPlayer.Builder(context, renderers).build().apply {
-            playWhenReady = true
-            addListener(object : androidx.media3.common.Player.Listener {
-                override fun onPlayerError(e: androidx.media3.common.PlaybackException) {
-                    playerError = e.message ?: "Player error ${e.errorCode}"
-                }
-            })
+        com.voidnullvalue.icseelocal.video.RobustClipPlayer.create(context) { msg ->
+            playerError = msg
         }
     }
     LaunchedEffect(uri) {
         playerError = null
         if (uri.isNullOrBlank()) return@LaunchedEffect
-        player.setMediaItem(MediaItem.fromUri(uri))
-        player.prepare()
-        player.playWhenReady = true
+        com.voidnullvalue.icseelocal.video.RobustClipPlayer.play(player, uri)
     }
     DisposableEffect(Unit) { onDispose { player.release() } }
 
@@ -382,8 +371,10 @@ fun ClipPlayerDialog(
                         PlayerView(ctx).apply {
                             this.player = player
                             useController = true
+                            setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                         }
                     },
+                    update = { it.player = player },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -399,9 +390,6 @@ fun ClipPlayerDialog(
                         Text("%.1f MB received".format(progressBytes / 1e6), color = Color.White.copy(0.7f), fontSize = 12.sp)
                     }
                 }
-            }
-            if (!buffering && uri != null && progressBytes > 0) {
-                // Still receiving remainder after early start — subtle status only.
             }
             if (buffering && uri != null) {
                 Text(

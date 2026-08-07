@@ -189,7 +189,15 @@ object XmHevcMuxer {
 
     private fun writeHevc(track: XmClipParser.HevcTrack, outFile: java.io.File, fps: Int) {
         val (w, h) = HevcSps.dimensions(track.sps)
+        require(w > 0 && h > 0) { "invalid HEVC dimensions ${w}x$h" }
+        // Drop leading non-IDR so ExoPlayer/HW decoders don't paint a green
+        // frame before the first keyframe.
+        val frames = dropUntilKey(track.frames) { nal ->
+            ((nal[0].toInt() shr 1) and 0x3F) in 16..21
+        }
+        require(frames.isNotEmpty()) { "no HEVC keyframe in clip yet" }
         val format = android.media.MediaFormat.createVideoFormat("video/hevc", w, h).apply {
+            // MediaMuxer expects codec-specific data as Annex-B VPS/SPS/PPS.
             val csd = ByteArrayOutputStream()
             listOfNotNull(track.vps, track.sps, track.pps).forEach {
                 csd.write(START_CODE)
@@ -197,49 +205,76 @@ object XmHevcMuxer {
             }
             setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(csd.toByteArray()))
         }
-        mux(format, track.frames, outFile, fps) { nal ->
+        muxLengthPrefixed(format, frames, outFile, fps) { nal ->
             ((nal[0].toInt() shr 1) and 0x3F) in 16..21
         }
     }
 
     private fun writeAvc(track: XmClipParser.AvcTrack, outFile: java.io.File, fps: Int) {
         val (w, h) = AvcSps.dimensions(track.sps)
+        require(w > 0 && h > 0) { "invalid AVC dimensions ${w}x$h" }
+        val frames = dropUntilKey(track.frames) { nal -> (nal[0].toInt() and 0x1F) == 5 }
+        require(frames.isNotEmpty()) { "no H.264 IDR in clip yet" }
         val format = android.media.MediaFormat.createVideoFormat("video/avc", w, h).apply {
             setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(START_CODE + track.sps))
             track.pps?.let { setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(START_CODE + it)) }
         }
-        mux(format, track.frames, outFile, fps) { nal ->
+        muxLengthPrefixed(format, frames, outFile, fps) { nal ->
             (nal[0].toInt() and 0x1F) == 5
         }
     }
 
-    private fun mux(
+    private fun dropUntilKey(frames: List<ByteArray>, isKey: (ByteArray) -> Boolean): List<ByteArray> {
+        val idx = frames.indexOfFirst(isKey)
+        if (idx < 0) return emptyList()
+        return frames.subList(idx, frames.size)
+    }
+
+    /**
+     * MediaMuxer sample payloads must be **length-prefixed** NAL units (AVCC/HVCC),
+     * not Annex-B start codes. Writing start codes is a common cause of green /
+     * corrupted playback on Qualcomm and other HW decoders.
+     */
+    private fun muxLengthPrefixed(
         format: android.media.MediaFormat,
         frames: List<ByteArray>,
         outFile: java.io.File,
         fps: Int,
         isKey: (ByteArray) -> Boolean,
     ) {
+        outFile.parentFile?.mkdirs()
+        if (outFile.exists()) outFile.delete()
         val muxer = android.media.MediaMuxer(outFile.absolutePath, android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        val trackIdx = muxer.addTrack(format)
-        muxer.start()
-        val info = android.media.MediaCodec.BufferInfo()
-        val frameDurUs = 1_000_000L / fps
-        frames.forEachIndexed { i, nal ->
-            val sample = ByteArrayOutputStream().apply {
-                write(START_CODE)
-                write(nal)
-            }.toByteArray()
-            info.set(
-                0,
-                sample.size,
-                i * frameDurUs,
-                if (isKey(nal)) android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME else 0,
-            )
-            muxer.writeSampleData(trackIdx, java.nio.ByteBuffer.wrap(sample), info)
+        try {
+            val trackIdx = muxer.addTrack(format)
+            muxer.start()
+            val info = android.media.MediaCodec.BufferInfo()
+            val frameDurUs = 1_000_000L / fps.coerceAtLeast(1)
+            frames.forEachIndexed { i, nal ->
+                val sample = lengthPrefixed(nal)
+                info.set(
+                    0,
+                    sample.size,
+                    i * frameDurUs,
+                    if (isKey(nal)) android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME else 0,
+                )
+                muxer.writeSampleData(trackIdx, java.nio.ByteBuffer.wrap(sample), info)
+            }
+            muxer.stop()
+        } finally {
+            runCatching { muxer.release() }
         }
-        muxer.stop()
-        muxer.release()
+    }
+
+    private fun lengthPrefixed(nal: ByteArray): ByteArray {
+        val out = ByteArray(4 + nal.size)
+        val len = nal.size
+        out[0] = (len ushr 24).toByte()
+        out[1] = (len ushr 16).toByte()
+        out[2] = (len ushr 8).toByte()
+        out[3] = len.toByte()
+        System.arraycopy(nal, 0, out, 4, nal.size)
+        return out
     }
 }
 

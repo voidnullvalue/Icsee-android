@@ -219,10 +219,10 @@ class RecordedClipExporter(
         private const val THUMB_TIMEOUT_MS = 25_000L
         /** ~first GOP; enough for SPS + IDR on typical XM clips. */
         const val THUMB_PREFIX_BYTES = 768_000L
-        /** First attempt at an early playable remux. */
-        const val EARLY_PLAY_MIN_BYTES = 400_000L
+        /** First attempt at an early playable remux (needs SPS + IDR). */
+        const val EARLY_PLAY_MIN_BYTES = 600_000L
         /** Retry interval when early remux fails (SPS/IDR not yet present). */
-        const val EARLY_PLAY_RETRY_BYTES = 300_000L
+        const val EARLY_PLAY_RETRY_BYTES = 350_000L
     }
 }
 
