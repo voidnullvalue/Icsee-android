@@ -135,6 +135,20 @@ fun CameraSettingsScreen(
                     onCheckedChange = { v -> viewModel.update { it.copy(rtspFallbackEnabled = v) } },
                 )
             }
+            Row(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                Text(
+                    "Use sub stream (lower res — needed on some phones)",
+                    modifier = Modifier.weight(1f).padding(top = 12.dp, end = 8.dp),
+                )
+                Switch(
+                    checked = state.streamType == StreamType.SUB,
+                    onCheckedChange = { v ->
+                        viewModel.update {
+                            it.copy(streamType = if (v) StreamType.SUB else StreamType.MAIN)
+                        }
+                    },
+                )
+            }
             if (state.rtspFallbackEnabled) {
                 OutlinedTextField(
                     value = state.rtspPort,

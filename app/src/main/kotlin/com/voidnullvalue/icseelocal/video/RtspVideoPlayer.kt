@@ -6,6 +6,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,10 +26,10 @@ sealed interface RtspPlayerState {
  * "RTSP video -- LIVE CONFIRMED").
  *
  * Attempts, in order:
- * 1. Configured credentials + TCP interleaved (live-confirmed transport)
- * 2. Factory-default RTSP account (`admin` / blank) + TCP — RTSP often has a
- *    separate credential store from DVRIP
- * 3. Same URLs again over UDP (some firmwares reject interleaved TCP)
+ * 1. Preferred stream (main/sub) + configured credentials + TCP
+ * 2. Same over the factory RTSP account (`admin` / blank)
+ * 3. On decoder capability failures (common for 2304×1296 main H.264 on
+ *    phone SoCs), the lower-res **sub** stream — then UDP variants
  *
  * Owns one [ExoPlayer] instance; call [release] when the screen goes away.
  */
@@ -37,7 +38,12 @@ class RtspVideoPlayer(context: Context) {
     private val _state = MutableStateFlow<RtspPlayerState>(RtspPlayerState.Idle)
     val state: StateFlow<RtspPlayerState> = _state.asStateFlow()
 
-    val exoPlayer: ExoPlayer = ExoPlayer.Builder(context).build().apply {
+    private val renderersFactory = DefaultRenderersFactory(context)
+        // Soft-decode when the primary HW codec rejects the format (e.g.
+        // OMX.qcom… avc with NO_EXCEEDS_CAPABILITIES on 2304×1296).
+        .setEnableDecoderFallback(true)
+
+    val exoPlayer: ExoPlayer = ExoPlayer.Builder(context, renderersFactory).build().apply {
         addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY && isPlaying) {
@@ -48,6 +54,14 @@ class RtspVideoPlayer(context: Context) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (isDecoderCapabilityError(error)) {
+                    val subIdx = attempts.indexOfFirst { !it.mainStream }
+                    if (subIdx >= 0 && attemptIndex < subIdx) {
+                        attemptIndex = subIdx
+                        playAttempt(attempts[subIdx])
+                        return
+                    }
+                }
                 val next = attempts.getOrNull(attemptIndex + 1)
                 if (next != null) {
                     attemptIndex++
@@ -59,7 +73,11 @@ class RtspVideoPlayer(context: Context) {
         })
     }
 
-    private data class Attempt(val url: String, val forceTcp: Boolean, val label: String)
+    private data class Attempt(
+        val url: String,
+        val forceTcp: Boolean,
+        val mainStream: Boolean,
+    )
 
     private var attempts: List<Attempt> = emptyList()
     private var attemptIndex = 0
@@ -78,27 +96,38 @@ class RtspVideoPlayer(context: Context) {
         mainStream: Boolean = true,
         preferFactoryRtspAccount: Boolean = false,
     ) {
-        val userUrl = RtspUrlBuilder.build(host, port, username, password, channel, mainStream)
-        val factoryUrl = RtspUrlBuilder.build(
-            host, port,
-            RtspUrlBuilder.FALLBACK_USERNAME, RtspUrlBuilder.FALLBACK_PASSWORD,
-            channel, mainStream,
-        )
-        val orderedUrls = if (preferFactoryRtspAccount || username.isBlank()) {
-            listOf(factoryUrl, userUrl).distinct()
-        } else {
-            listOf(userUrl, factoryUrl).distinct()
-        }
+        val creds = credentialOrder(username, password, preferFactoryRtspAccount)
+        val streamOrder = if (mainStream) listOf(true, false) else listOf(false)
         attempts = buildList {
-            for (url in orderedUrls) {
-                add(Attempt(url, forceTcp = true, label = "TCP"))
+            for (forceTcp in listOf(true, false)) {
+                for (useMain in streamOrder) {
+                    for ((user, pass) in creds) {
+                        add(
+                            Attempt(
+                                url = RtspUrlBuilder.build(host, port, user, pass, channel, useMain),
+                                forceTcp = forceTcp,
+                                mainStream = useMain,
+                            ),
+                        )
+                    }
+                }
             }
-            for (url in orderedUrls) {
-                add(Attempt(url, forceTcp = false, label = "UDP"))
-            }
-        }
+        }.distinctBy { it.url to it.forceTcp }
         attemptIndex = 0
         playAttempt(attempts.first())
+    }
+
+    private fun credentialOrder(
+        username: String,
+        password: String,
+        preferFactory: Boolean,
+    ): List<Pair<String, String>> {
+        val user = username to password
+        val factory = RtspUrlBuilder.FALLBACK_USERNAME to RtspUrlBuilder.FALLBACK_PASSWORD
+        return when {
+            preferFactory || username.isBlank() -> listOf(factory, user).distinct()
+            else -> listOf(user, factory).distinct()
+        }
     }
 
     private fun playAttempt(attempt: Attempt) {
@@ -130,6 +159,28 @@ class RtspVideoPlayer(context: Context) {
         exoPlayer.release()
     }
 
+    private fun isDecoderCapabilityError(error: PlaybackException): Boolean {
+        if (error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+        ) {
+            return true
+        }
+        var t: Throwable? = error
+        var depth = 0
+        while (t != null && depth < 6) {
+            val m = t.message.orEmpty()
+            if (m.contains("NO_EXCEEDS_CAPABILITIES", ignoreCase = true) ||
+                m.contains("Decoder init failed", ignoreCase = true) ||
+                m.contains("EXCEEDS_CAPABILITIES", ignoreCase = true)
+            ) {
+                return true
+            }
+            t = t.cause
+            depth++
+        }
+        return false
+    }
+
     private fun friendlyError(error: PlaybackException): String {
         val parts = ArrayList<String>()
         var t: Throwable? = error
@@ -143,11 +194,13 @@ class RtspVideoPlayer(context: Context) {
             depth++
         }
         val detail = parts.joinToString(" — ").ifBlank { "RTSP playback error" }
-        // Media3 often stops at the opaque "Source error"; point at the usual causes.
-        return if (detail.contains("Source error", ignoreCase = true) && parts.size == 1) {
-            "$detail (auth, SDP/HEVC params, or transport — try RTSP fallback / paste URL into VLC)"
-        } else {
-            detail
+        return when {
+            isDecoderCapabilityError(error) ->
+                "$detail — main stream resolution exceeds this phone's decoder; " +
+                    "set Stream to Sub in camera settings if this persists"
+            detail.contains("Source error", ignoreCase = true) && parts.size == 1 ->
+                "$detail (auth, SDP/HEVC params, or transport — try RTSP fallback / paste URL into VLC)"
+            else -> detail
         }
     }
 }
