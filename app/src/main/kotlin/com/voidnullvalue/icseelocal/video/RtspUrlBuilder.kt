@@ -1,5 +1,8 @@
 package com.voidnullvalue.icseelocal.video
 
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+
 /**
  * Builds this camera family's RTSP URL convention -- confirmed live
  * 2026-07-01 against the target camera (`DESCRIBE` -> `200 OK` with a real
@@ -17,7 +20,7 @@ package com.voidnullvalue.icseelocal.video
  * factory-default RTSP account confirmed live on the target camera --
  * distinct from (and not guaranteed to be the same as) the DVRIP account
  * a user configures in this app. Not assumed to work on every camera in
- * this family; used only as a fallback if the user's own configured
+ * this family; used as a fallback if the user's own configured
  * credentials are rejected.
  */
 object RtspUrlBuilder {
@@ -33,6 +36,14 @@ object RtspUrlBuilder {
         mainStream: Boolean = true,
     ): String {
         val streamIndex = if (mainStream) 0 else 1
-        return "rtsp://$host:$port/user=$username&password=$password&channel=$channel&stream=$streamIndex.sdp"
+        // Encode so passwords containing '&', '?', '#', spaces, etc. cannot
+        // truncate the vendor path (`user=…&password=…&channel=…`).
+        val user = encodeComponent(username)
+        val pass = encodeComponent(password)
+        return "rtsp://$host:$port/user=$user&password=$pass&channel=$channel&stream=$streamIndex.sdp"
     }
+
+    /** Percent-encode a path component; spaces as `%20` (not `+`). */
+    internal fun encodeComponent(value: String): String =
+        URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20")
 }

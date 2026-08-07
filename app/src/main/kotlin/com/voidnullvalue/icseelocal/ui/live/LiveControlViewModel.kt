@@ -13,6 +13,7 @@ import com.voidnullvalue.icseelocal.audio.MicrophoneSource
 import com.voidnullvalue.icseelocal.audio.TalkController
 import com.voidnullvalue.icseelocal.model.CameraDescriptor
 import com.voidnullvalue.icseelocal.model.ConnectionState
+import com.voidnullvalue.icseelocal.model.StreamType
 import com.voidnullvalue.icseelocal.ptz.DanceChoreography
 import com.voidnullvalue.icseelocal.ptz.KonamiCodeDetector
 import com.voidnullvalue.icseelocal.ptz.PtzCommand
@@ -169,7 +170,15 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
                 // waiting on Authenticated. found.channel is 0-based (DVRIP
                 // convention); this camera's RTSP URL convention is 1-based.
                 try {
-                    rtspPlayer.start(found.host, found.rtspPort, credentials.username, credentials.password, found.channel + 1)
+                    rtspPlayer.start(
+                        host = found.host,
+                        port = found.rtspPort,
+                        username = credentials.username,
+                        password = credentials.password,
+                        channel = found.channel + 1,
+                        mainStream = found.streamType == StreamType.MAIN,
+                        preferFactoryRtspAccount = found.rtspFallbackEnabled,
+                    )
                 } catch (e: Exception) {
                     // RTSP startup failure is not fatal; DVRIP session can still work
                 }
@@ -383,7 +392,15 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
                 CameraCredentials("", "")
             }
             try {
-                rtspPlayer.start(found.host, found.rtspPort, credentials.username, credentials.password, found.channel + 1)
+                rtspPlayer.start(
+                    host = found.host,
+                    port = found.rtspPort,
+                    username = credentials.username,
+                    password = credentials.password,
+                    channel = found.channel + 1,
+                    mainStream = found.streamType == StreamType.MAIN,
+                    preferFactoryRtspAccount = found.rtspFallbackEnabled,
+                )
             } catch (e: Exception) {
                 // RTSP restart failure is not fatal
             }

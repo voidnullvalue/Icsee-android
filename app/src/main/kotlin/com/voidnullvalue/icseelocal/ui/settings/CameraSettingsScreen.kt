@@ -129,7 +129,7 @@ fun CameraSettingsScreen(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
             )
             Row(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                Text("RTSP fallback", modifier = Modifier.padding(top = 12.dp, end = 8.dp))
+                Text("RTSP fallback (admin/blank first)", modifier = Modifier.padding(top = 12.dp, end = 8.dp))
                 Switch(
                     checked = state.rtspFallbackEnabled,
                     onCheckedChange = { v -> viewModel.update { it.copy(rtspFallbackEnabled = v) } },

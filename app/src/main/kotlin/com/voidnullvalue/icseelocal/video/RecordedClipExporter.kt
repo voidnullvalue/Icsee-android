@@ -1,13 +1,9 @@
 package com.voidnullvalue.icseelocal.video
 
-import android.media.MediaCodec
-import android.media.MediaFormat
-import android.media.MediaMuxer
 import com.voidnullvalue.icseelocal.session.DvripCommandChannel
 import com.voidnullvalue.icseelocal.dvrip.DvripTransport
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.nio.ByteBuffer
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -23,14 +19,11 @@ import kotlinx.serialization.json.put
  * Downloads a recorded clip off the camera's SD card and remuxes it to a
  * standard MP4 that ExoPlayer (or any player) can open.
  *
- * Recorded clips are stored as Xiongmai's private-framed HEVC: a stream of
- * `00 00 01 <marker>` units where markers 0xF9/0xFA/0xFC/0xFD are XM wrappers
- * (reserved HEVC NAL types 124-126, which decoders ignore) and the *real*
- * video is ordinary HEVC NALs interleaved between them -- VPS(32)/SPS(33)/
- * PPS(34)/IDR(19)/TRAIL(0,1). This was live-confirmed on 2026-07-09 by pulling
- * a clip and decoding it (see tools/live/ + PROTOCOL_STATUS.md); the earlier
- * "codec unknown / playback blocked" note was wrong -- it was HEVC all along,
- * missed because the code looked for H.264 start codes.
+ * Recorded clips are stored as Xiongmai's private-framed H.265 (sometimes H.264):
+ * a stream of `00 00 01 <marker>` units where markers 0xF9/0xFA/0xFC/0xFD are XM
+ * wrappers (reserved HEVC NAL types 124-126) and the real video is ordinary
+ * VPS/SPS/PPS/IDR/TRAIL NALs — either interleaved or nested inside the wrappers.
+ * See [XmClipParser] / [XmHevcMuxer].
  *
  * Wire sequence (per OpenIPC/python-dvr, live-confirmed): Claim on msg 1424,
  * then DownloadStart on msg 1420; file bytes arrive on msg 1426 until a frame
@@ -72,16 +65,20 @@ class RecordedClipExporter(
             // race-avoidance pattern the rest of the app uses).
             val job = async(start = CoroutineStart.UNDISPATCHED) {
                 var lastReport = 0L
+                // Match tools/live/sdcard_download.py: after DownloadStart, keep every
+                // non-JSON body until a zero-length frame. Filtering only mid=1426
+                // misses firmwares that deliver the file on a neighbouring mid.
                 transport.incomingFrames
-                    .filter { it.header.messageId == PB_DATA }
                     .takeWhile { it.header.payloadLength > 0 }
-                    // Skip interleaved JSON status frames; keep binary media.
-                    .filter { it.payload.isEmpty() || it.payload[0] != '{'.code.toByte() }
+                    .filter { frame ->
+                        val p = frame.payload
+                        if (p.isEmpty()) return@filter false
+                        if (p[0] == '{'.code.toByte()) return@filter false
+                        frame.header.messageId == PB_DATA ||
+                            (p.size >= 4 && p[0] == 0.toByte() && p[1] == 0.toByte() && p[2] == 1.toByte())
+                    }
                     .collect {
                         collected.write(it.payload)
-                        // Throttle progress: a fast LAN download is ~1000 frames in a
-                        // few seconds, and updating observable UI state per frame floods
-                        // recomposition and can ANR the app. Report at most ~4x/sec.
                         val now = System.currentTimeMillis()
                         if (now - lastReport >= 250) {
                             onProgress(collected.size().toLong())
@@ -93,7 +90,6 @@ class RecordedClipExporter(
             }
             commandChannel.sendJson(PB_CLAIM, body("Claim", fileName, begin, end))
             commandChannel.sendJson(PB_CTRL, body("DownloadStart", fileName, begin, end))
-            // Generous cap so a missing terminator can't hang forever.
             val raw = withTimeout(DOWNLOAD_TIMEOUT_MS) { job.await() }
             runCatching { commandChannel.sendJson(PB_CTRL, body("DownloadStop", fileName, begin, end)) }
             raw
@@ -111,79 +107,6 @@ class RecordedClipExporter(
         const val PB_CTRL = 1420
         const val PB_DATA = 1426
         private const val DOWNLOAD_TIMEOUT_MS = 180_000L
-    }
-}
-
-/** Converts an XM private-framed HEVC clip to a standard MP4 via [MediaMuxer]. */
-object XmHevcMuxer {
-    private const val MIME = "video/hevc"
-    private const val DEFAULT_FPS = 15
-
-    fun writeMp4(raw: ByteArray, outFile: File, fps: Int = DEFAULT_FPS) {
-        val nals = splitNals(raw)
-        var vps: ByteArray? = null
-        var sps: ByteArray? = null
-        var pps: ByteArray? = null
-        val frames = ArrayList<ByteArray>() // each entry is one VCL NAL (Annex-B, no start code)
-        for (nal in nals) {
-            if (nal.isEmpty()) continue
-            when (val type = (nal[0].toInt() shr 1) and 0x3F) {
-                32 -> vps = nal
-                33 -> sps = nal
-                34 -> pps = nal
-                in 0..31 -> frames.add(nal) // VCL slice
-                else -> { /* XM wrapper NAL (124-126) or non-VCL we don't need */ }
-            }
-        }
-        val spsNal = requireNotNull(sps) { "no HEVC SPS found in clip" }
-        val (w, h) = HevcSps.dimensions(spsNal)
-
-        val format = MediaFormat.createVideoFormat(MIME, w, h).apply {
-            // csd-0 carries VPS+SPS+PPS (Annex-B) for the MP4 hvcC box.
-            val csd = ByteArrayOutputStream()
-            listOfNotNull(vps, sps, pps).forEach { csd.write(START_CODE); csd.write(it) }
-            setByteBuffer("csd-0", ByteBuffer.wrap(csd.toByteArray()))
-        }
-
-        val muxer = MediaMuxer(outFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        val track = muxer.addTrack(format)
-        muxer.start()
-        val info = MediaCodec.BufferInfo()
-        val frameDurUs = 1_000_000L / fps
-        frames.forEachIndexed { i, nal ->
-            val sample = ByteArrayOutputStream().apply { write(START_CODE); write(nal) }.toByteArray()
-            val buf = ByteBuffer.wrap(sample)
-            val isKey = ((nal[0].toInt() shr 1) and 0x3F) in 16..21 // IDR/CRA/BLA keyframe slice types
-            info.set(0, sample.size, i * frameDurUs, if (isKey) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
-            muxer.writeSampleData(track, buf, info)
-        }
-        muxer.stop()
-        muxer.release()
-    }
-
-    private val START_CODE = byteArrayOf(0, 0, 0, 1)
-
-    /** Splits an Annex-B (or XM-framed) byte stream into NAL payloads (start codes removed). */
-    private fun splitNals(data: ByteArray): List<ByteArray> {
-        val starts = ArrayList<Int>()
-        var i = 0
-        while (i < data.size - 3) {
-            if (data[i].toInt() == 0 && data[i + 1].toInt() == 0 && data[i + 2].toInt() == 1) {
-                starts.add(i + 3)
-                i += 3
-            } else {
-                i++
-            }
-        }
-        val out = ArrayList<ByteArray>(starts.size)
-        for (k in starts.indices) {
-            val s = starts[k]
-            var e = if (k + 1 < starts.size) starts[k + 1] - 3 else data.size
-            // trim a trailing 0x00 that belonged to the next start code prefix
-            if (e > s && e < data.size && data[e - 1].toInt() == 0) e--
-            if (e > s) out.add(data.copyOfRange(s, e))
-        }
-        return out
     }
 }
 

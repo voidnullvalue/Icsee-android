@@ -1,6 +1,7 @@
 package com.voidnullvalue.icseelocal.video
 
 import android.content.Context
+import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -21,16 +22,15 @@ sealed interface RtspPlayerState {
 /**
  * Thin wrapper around ExoPlayer's RTSP extension for this camera's
  * confirmed-live RTSP stream (see [RtspUrlBuilder] and PROTOCOL_NOTES.md
- * "RTSP video -- LIVE CONFIRMED"). Tries the user's configured
- * credentials first; if the camera rejects those specifically for RTSP
- * (a real, observed possibility -- RTSP has its own account store,
- * separate from the DVRIP login account on this camera), falls back once
- * to the live-confirmed factory-default account.
+ * "RTSP video -- LIVE CONFIRMED").
  *
- * Owns one [ExoPlayer] instance; call [release] when the screen goes
- * away. Not unit-testable in a plain JVM test (requires the Android media
- * framework); the pure URL-construction and fallback-selection logic this
- * depends on is factored out into [RtspUrlBuilder] and is unit tested.
+ * Attempts, in order:
+ * 1. Configured credentials + TCP interleaved (live-confirmed transport)
+ * 2. Factory-default RTSP account (`admin` / blank) + TCP — RTSP often has a
+ *    separate credential store from DVRIP
+ * 3. Same URLs again over UDP (some firmwares reject interleaved TCP)
+ *
+ * Owns one [ExoPlayer] instance; call [release] when the screen goes away.
  */
 @UnstableApi
 class RtspVideoPlayer(context: Context) {
@@ -48,31 +48,65 @@ class RtspVideoPlayer(context: Context) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                if (!usedFallback) {
-                    usedFallback = true
-                    playUrl(fallbackUrl ?: return)
+                val next = attempts.getOrNull(attemptIndex + 1)
+                if (next != null) {
+                    attemptIndex++
+                    playAttempt(next)
                 } else {
-                    _state.value = RtspPlayerState.Error(error.message ?: "RTSP playback error")
+                    _state.value = RtspPlayerState.Error(friendlyError(error))
                 }
             }
         })
     }
 
-    private var fallbackUrl: String? = null
-    private var usedFallback = false
+    private data class Attempt(val url: String, val forceTcp: Boolean, val label: String)
 
-    fun start(host: String, port: Int, username: String, password: String, channel: Int) {
-        usedFallback = false
-        val primaryUrl = RtspUrlBuilder.build(host, port, username, password, channel)
-        fallbackUrl = RtspUrlBuilder.build(host, port, RtspUrlBuilder.FALLBACK_USERNAME, RtspUrlBuilder.FALLBACK_PASSWORD, channel)
-        playUrl(primaryUrl)
+    private var attempts: List<Attempt> = emptyList()
+    private var attemptIndex = 0
+
+    /**
+     * @param preferFactoryRtspAccount when true (settings "RTSP fallback"), try the
+     *   live-confirmed `admin`/blank RTSP account before the DVRIP credentials —
+     *   those often do not work for RTSP on this camera family.
+     */
+    fun start(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        channel: Int,
+        mainStream: Boolean = true,
+        preferFactoryRtspAccount: Boolean = false,
+    ) {
+        val userUrl = RtspUrlBuilder.build(host, port, username, password, channel, mainStream)
+        val factoryUrl = RtspUrlBuilder.build(
+            host, port,
+            RtspUrlBuilder.FALLBACK_USERNAME, RtspUrlBuilder.FALLBACK_PASSWORD,
+            channel, mainStream,
+        )
+        val orderedUrls = if (preferFactoryRtspAccount || username.isBlank()) {
+            listOf(factoryUrl, userUrl).distinct()
+        } else {
+            listOf(userUrl, factoryUrl).distinct()
+        }
+        attempts = buildList {
+            for (url in orderedUrls) {
+                add(Attempt(url, forceTcp = true, label = "TCP"))
+            }
+            for (url in orderedUrls) {
+                add(Attempt(url, forceTcp = false, label = "UDP"))
+            }
+        }
+        attemptIndex = 0
+        playAttempt(attempts.first())
     }
 
-    private fun playUrl(url: String) {
+    private fun playAttempt(attempt: Attempt) {
         _state.value = RtspPlayerState.Connecting
         val mediaSource = RtspMediaSource.Factory()
-            .setForceUseRtpTcp(true) // matches the transport confirmed working live (TCP-interleaved)
-            .createMediaSource(MediaItem.fromUri(url))
+            .setForceUseRtpTcp(attempt.forceTcp)
+            .setTimeoutMs(8_000)
+            .createMediaSource(MediaItem.fromUri(Uri.parse(attempt.url)))
         exoPlayer.setMediaSource(mediaSource)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
@@ -87,11 +121,33 @@ class RtspVideoPlayer(context: Context) {
     fun stop() {
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
-        usedFallback = false
+        attempts = emptyList()
+        attemptIndex = 0
         _state.value = RtspPlayerState.Idle
     }
 
     fun release() {
         exoPlayer.release()
+    }
+
+    private fun friendlyError(error: PlaybackException): String {
+        val parts = ArrayList<String>()
+        var t: Throwable? = error
+        var depth = 0
+        while (t != null && depth < 4) {
+            val m = t.message?.trim().orEmpty()
+            if (m.isNotEmpty() && parts.none { it.equals(m, ignoreCase = true) }) {
+                parts += m
+            }
+            t = t.cause
+            depth++
+        }
+        val detail = parts.joinToString(" — ").ifBlank { "RTSP playback error" }
+        // Media3 often stops at the opaque "Source error"; point at the usual causes.
+        return if (detail.contains("Source error", ignoreCase = true) && parts.size == 1) {
+            "$detail (auth, SDP/HEVC params, or transport — try RTSP fallback / paste URL into VLC)"
+        } else {
+            detail
+        }
     }
 }
