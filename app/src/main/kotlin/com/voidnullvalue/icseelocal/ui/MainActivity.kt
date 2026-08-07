@@ -45,6 +45,9 @@ class MainActivity : ComponentActivity() {
                         else -> null
                     }
                     val deviceManagementFamilyCameraId = when (val s = screen) {
+                        // Live also holds the device-mgmt session so recordings can
+                        // load under the stream without navigating away.
+                        is Screen.LiveControl -> s.cameraId
                         is Screen.DeviceManagement -> s.cameraId
                         is Screen.ConfigEditor -> s.cameraId
                         is Screen.ImageSettings -> s.cameraId
@@ -95,7 +98,9 @@ class MainActivity : ComponentActivity() {
                                     ),
                                 )
                             },
+                            onOpenFullRecordings = { nav.push(Screen.PlaybackBrowser(current.cameraId)) },
                             onBack = { nav.pop() },
+                            deviceManagementViewModel = deviceManagementViewModel,
                         )
                         is Screen.Diagnostics -> DiagnosticsScreen(
                             onBack = { nav.pop() },
