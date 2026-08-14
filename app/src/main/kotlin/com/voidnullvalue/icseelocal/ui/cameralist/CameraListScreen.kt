@@ -70,7 +70,11 @@ fun CameraListScreen(
             }
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onAddManual, containerColor = MaterialTheme.colorScheme.primaryContainer) {
+            FloatingActionButton(
+                onClick = onAddManual,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ) {
                 Icon(Icons.Default.Add, contentDescription = "Add camera manually")
             }
         },

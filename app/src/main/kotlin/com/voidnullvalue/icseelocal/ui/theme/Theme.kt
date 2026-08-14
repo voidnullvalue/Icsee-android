@@ -3,14 +3,18 @@ package com.voidnullvalue.icseelocal.ui.theme
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -71,18 +75,21 @@ private val IcseeTypography = Typography(
         fontSize = 40.sp,
         lineHeight = 46.sp,
         letterSpacing = (-0.5).sp,
+        color = Color.Unspecified,
     ),
     headlineMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 24.sp,
         lineHeight = 30.sp,
+        color = Color.Unspecified,
     ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 20.sp,
         lineHeight = 26.sp,
+        color = Color.Unspecified,
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -90,18 +97,36 @@ private val IcseeTypography = Typography(
         fontSize = 16.sp,
         lineHeight = 22.sp,
         letterSpacing = 0.1.sp,
+        color = Color.Unspecified,
+    ),
+    titleSmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Medium,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
+        letterSpacing = 0.1.sp,
+        color = Color.Unspecified,
     ),
     bodyLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
         lineHeight = 24.sp,
+        color = Color.Unspecified,
     ),
     bodyMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
         lineHeight = 20.sp,
+        color = Color.Unspecified,
+    ),
+    bodySmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+        color = Color.Unspecified,
     ),
     labelLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -109,6 +134,15 @@ private val IcseeTypography = Typography(
         fontSize = 14.sp,
         lineHeight = 18.sp,
         letterSpacing = 0.1.sp,
+        color = Color.Unspecified,
+    ),
+    labelMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Medium,
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+        letterSpacing = 0.5.sp,
+        color = Color.Unspecified,
     ),
     labelSmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -116,6 +150,7 @@ private val IcseeTypography = Typography(
         fontSize = 11.sp,
         lineHeight = 14.sp,
         letterSpacing = 0.4.sp,
+        color = Color.Unspecified,
     ),
 )
 
@@ -148,12 +183,21 @@ val MaterialTheme.statusColors: StatusColorTokens
 
 @Composable
 fun IcseeTheme(content: @Composable () -> Unit) {
-    androidx.compose.runtime.CompositionLocalProvider(LocalStatusColors provides StatusColorTokens()) {
+    CompositionLocalProvider(LocalStatusColors provides StatusColorTokens()) {
         MaterialTheme(
             colorScheme = DarkColors,
             shapes = IcseeShapes,
             typography = IcseeTypography,
-            content = content,
-        )
+        ) {
+            // Ensure LocalContentColor is light-on-dark everywhere. Without this,
+            // bare Box/hosts leave the default black content color and text/icons
+            // become unreadable on the true-black UI.
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = DarkColors.background,
+                contentColor = DarkColors.onBackground,
+                content = content,
+            )
+        }
     }
 }
