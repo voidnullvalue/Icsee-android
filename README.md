@@ -11,7 +11,7 @@
 [![Downloads](https://img.shields.io/github/downloads/voidnullvalue/Icsee-android/total?color=34d399&label=downloads)](https://github.com/voidnullvalue/Icsee-android/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3ddc84?logo=android&logoColor=white)
-![Kotlin + Compose](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin)
+![Kotlin + Compose](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white)
 
 </div>
 
