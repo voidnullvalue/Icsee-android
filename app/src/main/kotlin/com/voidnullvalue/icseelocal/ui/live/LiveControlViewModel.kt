@@ -7,12 +7,18 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.PlayerView
 import com.voidnullvalue.icseelocal.app.IcseeApplication
 import com.voidnullvalue.icseelocal.audio.FileAudioSource
 import com.voidnullvalue.icseelocal.audio.MicrophoneSource
 import com.voidnullvalue.icseelocal.audio.TalkController
+import com.voidnullvalue.icseelocal.config.CameraLighting
+import com.voidnullvalue.icseelocal.config.CameraLightingCaps
+import com.voidnullvalue.icseelocal.config.ConfigResult
+import com.voidnullvalue.icseelocal.config.DvripConfigChannel
 import com.voidnullvalue.icseelocal.model.CameraDescriptor
 import com.voidnullvalue.icseelocal.model.ConnectionState
+import com.voidnullvalue.icseelocal.model.StreamType
 import com.voidnullvalue.icseelocal.ptz.DanceChoreography
 import com.voidnullvalue.icseelocal.ptz.KonamiCodeDetector
 import com.voidnullvalue.icseelocal.ptz.PtzCommand
@@ -20,19 +26,36 @@ import com.voidnullvalue.icseelocal.ptz.PtzController
 import com.voidnullvalue.icseelocal.session.CameraCredentials
 import com.voidnullvalue.icseelocal.session.CameraSessionManager
 import com.voidnullvalue.icseelocal.storage.CameraStore
+import com.voidnullvalue.icseelocal.storage.PresetThumbStore
+import com.voidnullvalue.icseelocal.video.LiveStreamRecorder
+import com.voidnullvalue.icseelocal.video.RecordedVideoStore
 import com.voidnullvalue.icseelocal.video.RtspPlayerState
 import com.voidnullvalue.icseelocal.video.RtspVideoPlayer
+import com.voidnullvalue.icseelocal.video.SavedVideo
+import com.voidnullvalue.icseelocal.video.SnapshotCapture
+import com.voidnullvalue.icseelocal.video.SnapshotResult
 import com.voidnullvalue.icseelocal.video.VideoStats
 import com.voidnullvalue.icseelocal.video.VideoStreamController
+import java.io.File
+import java.lang.ref.WeakReference
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class LiveControlViewModel(application: Application) : AndroidViewModel(application), DefaultLifecycleObserver {
     private val store = CameraStore(application)
+    private val presetThumbs = PresetThumbStore(application)
     private val microphone = MicrophoneSource(application)
     // The app-wide session owner. This ViewModel no longer creates or shuts down
     // CameraSessionManagers -- it acquires the shared one for the camera it's showing
@@ -91,7 +114,7 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private val _speedStep = MutableStateFlow(2)
+    private val _speedStep = MutableStateFlow(7)
     val speedStep: StateFlow<Int> = _speedStep.asStateFlow()
 
     private val _talking = MutableStateFlow(false)
@@ -110,6 +133,295 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
 
     private val _videoStats = MutableStateFlow(VideoStats())
     val videoStats: StateFlow<VideoStats> = _videoStats.asStateFlow()
+
+    private val _cruiseActive = MutableStateFlow(false)
+    val cruiseActive: StateFlow<Boolean> = _cruiseActive.asStateFlow()
+
+    private val _dayNightMode = MutableStateFlow(0) // 0 Auto, 1 Day, 2 Night
+    val dayNightMode: StateFlow<Int> = _dayNightMode.asStateFlow()
+
+    private val _lightOn = MutableStateFlow(false)
+    val lightOn: StateFlow<Boolean> = _lightOn.asStateFlow()
+
+    private val _lightingCaps = MutableStateFlow(CameraLightingCaps())
+    val lightingCaps: StateFlow<CameraLightingCaps> = _lightingCaps.asStateFlow()
+
+    private val _statusToast = MutableStateFlow<String?>(null)
+    val statusToast: StateFlow<String?> = _statusToast.asStateFlow()
+
+    private val _recording = MutableStateFlow(false)
+    val recording: StateFlow<Boolean> = _recording.asStateFlow()
+
+    private val _recordElapsedMs = MutableStateFlow(0L)
+    val recordElapsedMs: StateFlow<Long> = _recordElapsedMs.asStateFlow()
+
+    /** Local JPEG paths for PTZ presets 1–4 (last frame when the preset was saved). */
+    private val _presetThumbPaths = MutableStateFlow<Map<Int, String>>(emptyMap())
+    val presetThumbPaths: StateFlow<Map<Int, String>> = _presetThumbPaths.asStateFlow()
+    /** Bumps when a preset thumb is rewritten so Compose reloads the JPEG. */
+    private val _presetThumbEpoch = MutableStateFlow(0L)
+    val presetThumbEpoch: StateFlow<Long> = _presetThumbEpoch.asStateFlow()
+
+    private var liveRecorder: LiveStreamRecorder? = null
+    private var recordOutFile: File? = null
+    private var recordTicker: Job? = null
+    private var playerViewRef: WeakReference<PlayerView>? = null
+
+    @UnstableApi
+    val muted: StateFlow<Boolean> = rtspPlayer.muted
+
+    @UnstableApi
+    val bitrateBps: StateFlow<Long> = rtspPlayer.bitrateBps
+
+    fun bindPlayerView(view: PlayerView?) {
+        playerViewRef = view?.let { WeakReference(it) }
+    }
+
+    fun clearStatusToast() {
+        _statusToast.value = null
+    }
+
+    @UnstableApi
+    fun toggleMute() = rtspPlayer.toggleMute()
+
+    @UnstableApi
+    fun setStreamType(type: StreamType) {
+        val found = _camera.value ?: return
+        if (found.streamType == type) return
+        viewModelScope.launch {
+            val updated = found.copy(streamType = type)
+            val creds = store.credentialsFor(found.id)
+            store.save(updated, creds)
+            _camera.value = updated
+            val credentials = creds ?: CameraCredentials("", "")
+            rtspPlayer.start(
+                host = updated.host,
+                port = updated.rtspPort,
+                username = credentials.username,
+                password = credentials.password,
+                channel = updated.channel + 1,
+                mainStream = type == StreamType.MAIN,
+                preferFactoryRtspAccount = updated.rtspFallbackEnabled,
+            )
+        }
+    }
+
+    fun toggleCruise() {
+        if (_cruiseActive.value) {
+            stopTour()
+            _cruiseActive.value = false
+        } else {
+            startTour()
+            _cruiseActive.value = true
+        }
+    }
+
+    fun zoomIn() = ptzController?.onPointerDown(PtzCommand.ZOOM_TILE, _speedStep.value)
+    fun zoomOut() = ptzController?.onPointerDown(PtzCommand.ZOOM_WIDE, _speedStep.value)
+    fun zoomStop() = ptzController?.onPointerUp()
+
+    fun toggleLight() {
+        val manager = sessionManager ?: run {
+            _statusToast.value = "Connect to camera to change lights"
+            return
+        }
+        val transport = manager.controlTransport ?: return
+        val channel = manager.commandChannel ?: return
+        val sid = (manager.state.value as? ConnectionState.Authenticated)?.sessionId ?: return
+        viewModelScope.launch {
+            val config = DvripConfigChannel(transport, channel, sid, getApplication())
+            val param = (config.getConfig("Camera.Param") as? ConfigResult.Success)?.value
+            val paramEx = (config.getConfig("Camera.ParamEx") as? ConfigResult.Success)?.value
+            val caps = CameraLighting.probe(param, paramEx)
+            _lightingCaps.value = caps
+            if (!caps.hasAnyLightControl) {
+                _statusToast.value = "This camera has no light controls (checked WhiteLight, DayNightSwitch, DayNightColor)"
+                return@launch
+            }
+            val result = CameraLighting.toggle(param, paramEx)
+            if (result == null) {
+                _statusToast.value = "Could not update light settings"
+                return@launch
+            }
+            when (config.setConfig(result.configName, result.patched)) {
+                is ConfigResult.Success -> {
+                    _lightingCaps.value = result.caps
+                    _lightOn.value = result.caps.whiteLightMode?.equals("Open", ignoreCase = true) == true
+                    result.caps.dayNightMode?.let { _dayNightMode.value = it }
+                    _statusToast.value = result.statusLabel
+                }
+                is ConfigResult.Failure -> _statusToast.value = "Light set failed"
+            }
+        }
+    }
+
+    fun reportLightingCaps() {
+        val caps = _lightingCaps.value
+        _statusToast.value = if (caps.hasAnyLightControl) {
+            "Supported: ${caps.summary}"
+        } else {
+            "No light features detected yet — connect and try Light again"
+        }
+    }
+
+    @UnstableApi
+    fun takeSnapshot() {
+        val view = playerViewRef?.get() ?: run {
+            _statusToast.value = "Video not ready for snapshot"
+            return
+        }
+        val name = _camera.value?.displayName ?: "camera"
+        viewModelScope.launch {
+            val capture = SnapshotCapture(getApplication())
+            val surface = findSurfaceView(view)
+            val result = if (surface != null) {
+                capture.captureFromSurfaceView(surface, name)
+            } else {
+                // TextureView path: grab bitmap directly
+                val texture = findTextureView(view)
+                val bmp = texture?.bitmap
+                if (bmp == null) SnapshotResult.Failure("no frame")
+                else {
+                    // Reuse SnapshotCapture's gallery save via a temp surface path — save manually
+                    saveBitmapSnapshot(bmp, name).also { bmp.recycle() }
+                }
+            }
+            capture.release()
+            _statusToast.value = when (result) {
+                is SnapshotResult.Success -> "Snapshot saved"
+                is SnapshotResult.Failure -> "Snapshot failed: ${result.reason}"
+            }
+        }
+    }
+
+    @UnstableApi
+    fun toggleRecording() {
+        if (_recording.value) stopRecording() else startRecording()
+    }
+
+    @UnstableApi
+    private fun startRecording() {
+        val view = playerViewRef?.get() ?: run {
+            _statusToast.value = "Video not ready to record"
+            return
+        }
+        val app = getApplication<Application>()
+        val file = File(app.cacheDir, "live_${System.currentTimeMillis()}.mp4")
+        val recorder = LiveStreamRecorder(app)
+        if (!recorder.start(view, file)) {
+            _statusToast.value = "Already recording"
+            return
+        }
+        liveRecorder = recorder
+        recordOutFile = file
+        _recording.value = true
+        _recordElapsedMs.value = 0
+        recordTicker = viewModelScope.launch {
+            while (_recording.value) {
+                _recordElapsedMs.value = recorder.elapsedMs
+                kotlinx.coroutines.delay(250)
+            }
+        }
+        _statusToast.value = "Recording…"
+    }
+
+    @UnstableApi
+    private fun stopRecording() {
+        val recorder = liveRecorder
+        val file = recordOutFile
+        liveRecorder = null
+        recordOutFile = null
+        recordTicker?.cancel()
+        recordTicker = null
+        _recording.value = false
+        recorder?.stop()
+        if (file == null || !file.exists() || file.length() < 1000) {
+            runCatching { file?.delete() }
+            _statusToast.value = "Recording failed (too short)"
+            return
+        }
+        viewModelScope.launch {
+            val name = "icsee_live_${System.currentTimeMillis()}.mp4"
+            when (val saved = RecordedVideoStore.save(getApplication(), file, name)) {
+                is SavedVideo.Success -> _statusToast.value = "Saved ${saved.label}"
+                is SavedVideo.Failure -> _statusToast.value = "Save failed: ${saved.reason}"
+            }
+            runCatching { file.delete() }
+        }
+    }
+
+    private fun saveBitmapSnapshot(bitmap: android.graphics.Bitmap, cameraName: String): SnapshotResult {
+        val capture = SnapshotCapture(getApplication())
+        // SnapshotCapture only exposes SurfaceView path; write via a one-off MediaStore copy.
+        return try {
+            val tmp = File.createTempFile("snap", ".jpg", getApplication<Application>().cacheDir)
+            java.io.FileOutputStream(tmp).use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, it) }
+            // Re-read through RecordedVideoStore-style image save
+            val result = SnapshotCapture(getApplication()).let { c ->
+                // Use internal pattern: Pictures via MediaStore — duplicate minimal save
+                saveJpegToGallery(tmp, cameraName).also { tmp.delete(); c.release() }
+            }
+            capture.release()
+            result
+        } catch (e: Exception) {
+            capture.release()
+            SnapshotResult.Failure(e.message ?: "save failed")
+        }
+    }
+
+    private fun saveJpegToGallery(file: File, cameraName: String): SnapshotResult {
+        val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+        val safe = cameraName.replace(Regex("[^A-Za-z0-9_-]"), "_")
+        val filename = "icsee_${safe}_$timestamp.jpg"
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, filename)
+            put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/iCSeeLocalControl")
+        }
+        val resolver = getApplication<Application>().contentResolver
+        val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: return SnapshotResult.Failure("MediaStore insert failed")
+        return try {
+            resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
+                ?: return SnapshotResult.Failure("write failed")
+            SnapshotResult.Success(uri.toString())
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            SnapshotResult.Failure(e.message ?: "save failed")
+        }
+    }
+
+    private fun findSurfaceView(root: android.view.View): android.view.SurfaceView? {
+        if (root is android.view.SurfaceView) return root
+        if (root is android.view.ViewGroup) {
+            for (i in 0 until root.childCount) {
+                findSurfaceView(root.getChildAt(i))?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun findTextureView(root: android.view.View): android.view.TextureView? {
+        if (root is android.view.TextureView) return root
+        if (root is android.view.ViewGroup) {
+            for (i in 0 until root.childCount) {
+                findTextureView(root.getChildAt(i))?.let { return it }
+            }
+        }
+        return null
+    }
+
+    companion object {
+        /**
+         * Dance easter-egg media: the Funkytown video on the Internet Archive, a
+         * plain DRM-free MP4 (H.264 + AAC). The on-screen ExoPlayer streams it
+         * for the visual; [FileAudioSource] decodes its audio for the camera
+         * speaker + PTZ beats. Not a YouTube embed (blocked, error 152) and not a
+         * stream-rip -- a direct read of a publicly-hosted file.
+         */
+        const val DANCE_MEDIA_URL =
+            "https://archive.org/download/Lipps_Inc_Funky_Town/Lipps_Inc_Funky_Town.mp4"
+    }
 
     init {
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
@@ -156,6 +468,7 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
                 releaseSession()
 
                 _camera.value = found
+                _presetThumbPaths.value = presetThumbs.forCamera(found.id)
                 val credentials = try {
                     store.credentialsFor(cameraId) ?: CameraCredentials("", "")
                 } catch (e: Exception) {
@@ -169,7 +482,15 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
                 // waiting on Authenticated. found.channel is 0-based (DVRIP
                 // convention); this camera's RTSP URL convention is 1-based.
                 try {
-                    rtspPlayer.start(found.host, found.rtspPort, credentials.username, credentials.password, found.channel + 1)
+                    rtspPlayer.start(
+                        host = found.host,
+                        port = found.rtspPort,
+                        username = credentials.username,
+                        password = credentials.password,
+                        channel = found.channel + 1,
+                        mainStream = found.streamType == StreamType.MAIN,
+                        preferFactoryRtspAccount = found.rtspFallbackEnabled,
+                    )
                 } catch (e: Exception) {
                     // RTSP startup failure is not fatal; DVRIP session can still work
                 }
@@ -216,6 +537,8 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         sessionStateJob = null
         stopTalk()
         stopDance()
+        if (_recording.value) stopRecording()
+        _cruiseActive.value = false
         videoStatsJob?.cancel()
         videoController?.stop()
         videoController = null
@@ -249,6 +572,20 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         }
         talkController = TalkController(found.host, found.dvripPort, state.sessionId, microphone, seq, channel)
         wiredSessionId = state.sessionId
+        val transport = sessionManager?.controlTransport ?: return
+        probeLighting(channel, transport, state.sessionId)
+    }
+
+    private fun probeLighting(channel: com.voidnullvalue.icseelocal.session.DvripCommandChannel, transport: com.voidnullvalue.icseelocal.dvrip.DvripTransport, sid: UInt) {
+        viewModelScope.launch {
+            val config = DvripConfigChannel(transport, channel, sid, getApplication())
+            val param = (config.getConfig("Camera.Param") as? ConfigResult.Success)?.value
+            val paramEx = (config.getConfig("Camera.ParamEx") as? ConfigResult.Success)?.value
+            val caps = CameraLighting.probe(param, paramEx)
+            _lightingCaps.value = caps
+            _lightOn.value = caps.whiteLightMode?.equals("Open", ignoreCase = true) == true
+            caps.dayNightMode?.let { _dayNightMode.value = it }
+        }
     }
 
     fun reconnect() {
@@ -271,7 +608,78 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     fun onPtzUp() = ptzController?.onPointerUp()
     fun onPtzCancel() = ptzController?.onPointerCancel()
     fun onPtzDirectionChange(command: PtzCommand) = ptzController?.onDirectionChange(command, _speedStep.value)
-    fun setPreset(preset: Int) = ptzController?.setPreset(preset)
+
+    /**
+     * Saves PTZ preset [preset] and captures the current live frame as its
+     * thumbnail (shown on the 1–4 favourite buttons).
+     */
+    @UnstableApi
+    fun setPreset(preset: Int) {
+        ptzController?.setPreset(preset)
+        val cameraId = _camera.value?.id ?: return
+        val view = playerViewRef?.get() ?: run {
+            _statusToast.value = "Preset $preset saved (no frame for thumb)"
+            return
+        }
+        viewModelScope.launch {
+            val path = capturePresetThumb(view, cameraId, preset)
+            if (path != null) {
+                presetThumbs.put(cameraId, preset, path)
+                _presetThumbPaths.value = _presetThumbPaths.value + (preset to path)
+                _presetThumbEpoch.value = System.currentTimeMillis()
+                _statusToast.value = "Favourite saved"
+            } else {
+                _statusToast.value = "Favourite saved (couldn’t capture frame)"
+            }
+        }
+    }
+
+    @UnstableApi
+    private suspend fun capturePresetThumb(view: androidx.media3.ui.PlayerView, cameraId: String, preset: Int): String? {
+        val out = presetThumbs.thumbFile(cameraId, preset)
+        return try {
+            val texture = findTextureView(view)
+            val bmp = texture?.bitmap
+            if (bmp != null) {
+                withContext(Dispatchers.IO) {
+                    java.io.FileOutputStream(out).use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, it) }
+                }
+                bmp.recycle()
+                out.absolutePath
+            } else {
+                val surface = findSurfaceView(view) ?: return null
+                copySurfaceToFile(surface, out)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun copySurfaceToFile(surfaceView: android.view.SurfaceView, out: File): String? {
+        if (surfaceView.width <= 0 || surfaceView.height <= 0) return null
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            surfaceView.width, surfaceView.height, android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val thread = android.os.HandlerThread("preset-thumb").also { it.start() }
+        val handler = android.os.Handler(thread.looper)
+        try {
+            android.view.PixelCopy.request(
+                surfaceView, bitmap,
+                { result -> deferred.complete(result == android.view.PixelCopy.SUCCESS) },
+                handler,
+            )
+            if (!deferred.await()) return null
+            withContext(Dispatchers.IO) {
+                java.io.FileOutputStream(out).use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, it) }
+            }
+            return out.absolutePath
+        } finally {
+            bitmap.recycle()
+            thread.quitSafely()
+        }
+    }
+
     fun gotoPreset(preset: Int) = ptzController?.gotoPreset(preset)
     fun clearPreset(preset: Int) = ptzController?.clearPreset(preset)
     fun startTour() = ptzController?.startTour()
@@ -383,7 +791,15 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
                 CameraCredentials("", "")
             }
             try {
-                rtspPlayer.start(found.host, found.rtspPort, credentials.username, credentials.password, found.channel + 1)
+                rtspPlayer.start(
+                    host = found.host,
+                    port = found.rtspPort,
+                    username = credentials.username,
+                    password = credentials.password,
+                    channel = found.channel + 1,
+                    mainStream = found.streamType == StreamType.MAIN,
+                    preferFactoryRtspAccount = found.rtspFallbackEnabled,
+                )
             } catch (e: Exception) {
                 // RTSP restart failure is not fatal
             }
@@ -393,20 +809,9 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
 
     @UnstableApi
     override fun onCleared() {
+        if (_recording.value) stopRecording()
         releaseSession()
         rtspPlayer.release()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(this)
-    }
-
-    companion object {
-        /**
-         * Dance easter-egg media: the Funkytown video on the Internet Archive, a
-         * plain DRM-free MP4 (H.264 + AAC). The on-screen ExoPlayer streams it
-         * for the visual; [FileAudioSource] decodes its audio for the camera
-         * speaker + PTZ beats. Not a YouTube embed (blocked, error 152) and not a
-         * stream-rip -- a direct read of a publicly-hosted file.
-         */
-        const val DANCE_MEDIA_URL =
-            "https://archive.org/download/Lipps_Inc_Funky_Town/Lipps_Inc_Funky_Town.mp4"
     }
 }

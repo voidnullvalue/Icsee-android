@@ -45,6 +45,8 @@ object GAlaw {
 
     fun encodeBuffer(pcm16: ShortArray): ByteArray = ByteArray(pcm16.size) { encode(pcm16[it]) }
 
+    fun decodeBuffer(alaw: ByteArray): ShortArray = ShortArray(alaw.size) { decode(alaw[it]) }
+
     private fun segmentFor(value: Int): Int {
         for (i in SEG_AEND.indices) if (value <= SEG_AEND[i]) return i
         return SEG_AEND.size

@@ -35,4 +35,14 @@ class RtspUrlBuilderTest {
         )
         assertEquals("rtsp://192.168.1.100:554/user=admin&password=&channel=1&stream=0.sdp", url)
     }
+
+    @Test
+    fun `encodes special characters in the password so amp cannot truncate the path`() {
+        val url = RtspUrlBuilder.build(
+            host = "192.168.1.100",
+            username = "user",
+            password = "a&b=c",
+        )
+        assertEquals("rtsp://192.168.1.100:554/user=user&password=a%26b%3Dc&channel=1&stream=0.sdp", url)
+    }
 }

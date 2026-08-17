@@ -38,6 +38,8 @@ fun PtzPadButton(
     onUp: () -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
+    sizeDp: Int = 40,
+    iconDp: Int = 20,
 ) {
     var pressed by remember { mutableStateOf(false) }
     val bg by animateColorAsState(
@@ -47,7 +49,7 @@ fun PtzPadButton(
     val fg = if (pressed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     Box(
         modifier
-            .size(94.dp)
+            .size(sizeDp.dp)
             .clip(CircleShape)
             .background(bg)
             .pointerInput(Unit) {
@@ -62,6 +64,6 @@ fun PtzPadButton(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription, tint = fg, modifier = Modifier.size(44.dp))
+        Icon(icon, contentDescription, tint = fg, modifier = Modifier.size(iconDp.dp))
     }
 }

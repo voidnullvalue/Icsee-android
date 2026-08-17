@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <!-- Dark tile background -->
+    <path
+        android:fillColor="#2A2F36"
+        android:pathData="M8,8h80v80h-80z" />
+    <!-- Soft vignette frame -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#3D4654"
+        android:strokeWidth="2"
+        android:pathData="M12,12h72v72h-72z" />
+    <!-- Camera body -->
+    <path
+        android:fillColor="#5B6573"
+        android:pathData="M30,38h10l4,-6h18l4,6h10c2.2,0 4,1.8 4,4v22c0,2.2 -1.8,4 -4,4H30c-2.2,0 -4,-1.8 -4,-4V42c0,-2.2 1.8,-4 4,-4z" />
+    <!-- Lens -->
+    <path
+        android:fillColor="#1E242C"
+        android:pathData="M48,48m-10,0a10,10 0,1 1,20 0a10,10 0,1 1,-20 0" />
+    <path
+        android:fillColor="#7A8796"
+        android:pathData="M48,48m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0" />
+    <!-- Star hint (favourite) -->
+    <path
+        android:fillColor="#6B7280"
+        android:pathData="M72,22l1.8,3.6 4,0.6 -2.9,2.8 0.7,4 -3.6,-1.9 -3.6,1.9 0.7,-4 -2.9,-2.8 4,-0.6z" />
+</vector>

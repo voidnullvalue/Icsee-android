@@ -18,7 +18,7 @@ Host:              Termux on Android (this proot has direct filesystem access
 | Gradle | `/data/data/com.termux/files/usr/opt/gradle/bin/gradle` (Termux package, on `PATH`) | Gradle 9.6.1, native aarch64. Used once to bootstrap the Gradle wrapper (`gradle wrapper --gradle-version 9.6.1`); the wrapper (`./gradlew`) is used for everything after that. |
 | Android SDK | `/data/data/com.termux/files/home/lib/android-sdk-9123335` | Pre-existing SDK install found on this system (platforms 24/28/35, build-tools 33.0.1; AGP auto-downloaded platform 36 and build-tools 36.0.0 into it on first build via its own SDK auto-provisioning). Referenced via `local.properties` (`sdk.dir=...`), not committed. |
 | Kotlin | 2.4.0, via AGP's built-in Kotlin support | AGP 9.x no longer needs/accepts the separate `org.jetbrains.kotlin.android` Gradle plugin -- applying it fails the build with an explicit error telling you to remove it. Only `org.jetbrains.kotlin.plugin.compose` and `org.jetbrains.kotlin.plugin.serialization` are applied. |
-| AGP | 9.2.1 | Latest stable at build time; required for Gradle 9.6.1 compatibility. |
+| AGP | 9.0.0 | Latest supported version in this environment. |
 | aapt2 | see below | The one non-trivial part of this setup. |
 
 ## The aapt2 problem, and how it's solved
@@ -28,7 +28,7 @@ Neither of the two "obvious" aapt2 binaries works natively on aarch64:
 1. **Maven-distributed aapt2** (what AGP downloads by default, artifact
    `com.android.tools.build:aapt2`): only published for `linux` (x86_64),
    `osx`, and `windows` classifiers. There is no `linux-aarch64` variant.
-   Confirmed by downloading `aapt2-9.2.1-...-linux.jar` and inspecting the
+   Confirmed by downloading `aapt2-9.0.0-...-linux.jar` and inspecting the
    embedded binary's ELF header: `Machine: Advanced Micro Devices X86-64`.
 2. **Termux's own native aarch64 aapt2** (`/data/data/com.termux/files/usr/bin/aapt2`,
    reports version `2.19`): runs natively, but is too old to parse the
@@ -48,7 +48,7 @@ apt-get install -y libc6:amd64 libstdc++6:amd64 zlib1g:amd64
 ```
 
 The x86_64 `aapt2` binary was extracted from the Maven artifact
-(`aapt2-9.2.1-15009934-linux.jar`, which is just a zip containing the
+(`aapt2-9.0.0-15009934-linux.jar`, which is just a zip containing the
 binary) into `toolchain/aapt2-bin/aapt2-x86_64`, and a wrapper script
 (`toolchain/aapt2-bin/aapt2`) runs it under `qemu-x86_64-static` with
 `QEMU_LD_PREFIX` pointed at the amd64 glibc just installed:
