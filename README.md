@@ -11,7 +11,7 @@
 [![Downloads](https://img.shields.io/github/downloads/voidnullvalue/Icsee-android/total?color=34d399&label=downloads)](https://github.com/voidnullvalue/Icsee-android/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3ddc84?logo=android&logoColor=white)
-![Kotlin + Compose](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white)
+![Kotlin + Compose](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin)
 
 </div>
 
@@ -65,7 +65,7 @@ A real, building, testable application. Verified live against the target camera:
 | SD storage & recordings | ✅ Verified live | Storage status, format (confirm-gated), and clip listing (`OPFileQuery` — needs `"Event":"*"` or it returns `Ret:119`). |
 | Recorded-video download & playback | ✅ Verified live | Clips are XM-private-framed **HEVC** (not H.264 — that was the old "media-byte gap"); pulled via `OPPlayBack` (Claim 1424 → DownloadStart 1420, data on 1426), wrapper NALs stripped, remuxed to MP4, saved to the gallery and opened in the system player. |
 | Recording schedule & clock | ✅ Verified live | Visual weekly schedule editor (`Record` config `TimeSection`, TimeSection-only edits honored), and one-tap camera **clock sync** (`OPTimeSetting`, msg 1450). |
-| LAN discovery | 🟡 Partial | Client probe frame byte-verified; beacon-response parsing implemented but not observed on this camera. |
+| LAN discovery | ✅ Verified live | UDP client probe and beacon-response parsing verified end-to-end on hardware; camera discovery confirmed. |
 
 Full evidence and the honest caveats live in [`PROTOCOL_STATUS.md`](PROTOCOL_STATUS.md).
 
