@@ -2,12 +2,12 @@ name: Build & Release
 
 on:
   push:
-    tags:
-      - "v*"          # push a tag like v1.0.0 to cut a release
-  workflow_dispatch:  # or run manually to just get a build artifact
+    branches:
+      - "main"
+  workflow_dispatch:
 
 permissions:
-  contents: write     # needed to create the GitHub Release
+  contents: write
 
 jobs:
   build:
@@ -16,55 +16,77 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Determine release version
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n1)"
+          if [ -z "$VERSION" ]; then
+            echo "Could not determine versionName from app/build.gradle.kts" >&2
+            exit 1
+          fi
+
+          TAG="v$VERSION"
+          APK="icsee-camera-$TAG.apk"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "apk=$APK" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG already exists; nothing to publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # The committed gradle.properties pins aapt2 to a local ARM/proot toolchain
       # path (see BUILDING_IN_PROOT.md) that does not exist on CI. Drop it so the
       # standard Maven-distributed aapt2 is used on the x86_64 runner.
       - name: Neutralize proot-only aapt2 override
+        if: steps.release.outputs.exists != 'true'
         run: sed -i '/android.aapt2FromMavenOverride/d' gradle.properties
 
       - name: Set up JDK 17
+        if: steps.release.outputs.exists != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android SDK
+        if: steps.release.outputs.exists != 'true'
         uses: android-actions/setup-android@v3
 
       - name: Install required SDK packages
+        if: steps.release.outputs.exists != 'true'
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up Gradle
+        if: steps.release.outputs.exists != 'true'
         uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests
+        if: steps.release.outputs.exists != 'true'
         run: ./gradlew testDebugUnitTest
 
       - name: Build release APK
+        if: steps.release.outputs.exists != 'true'
         run: ./gradlew assembleRelease -x test
 
       - name: Name the artifact
-        id: name
-        run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="${{ github.ref_name }}"
-          else
-            VERSION="${{ github.sha }}"
-            VERSION="dev-${VERSION:0:7}"
-          fi
-          OUT="icsee-camera-${VERSION}.apk"
-          cp app/build/outputs/apk/release/app-release.apk "$OUT"
-          echo "apk=$OUT" >> "$GITHUB_OUTPUT"
+        if: steps.release.outputs.exists != 'true'
+        run: cp app/build/outputs/apk/release/app-release.apk "${{ steps.release.outputs.apk }}"
 
       - name: Upload build artifact
+        if: steps.release.outputs.exists != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.name.outputs.apk }}
-          path: ${{ steps.name.outputs.apk }}
+          name: ${{ steps.release.outputs.apk }}
+          path: ${{ steps.release.outputs.apk }}
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: github.ref_type == 'tag'
+        if: steps.release.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -77,8 +99,10 @@ jobs:
             '' \
             '<sub>♪ ..._that'"'"'s the melody to funkytown_ ♪</sub>' \
             > release-notes.md
-          gh release create "${{ github.ref_name }}" \
-            "${{ steps.name.outputs.apk }}" \
-            --title "${{ github.ref_name }}" \
+
+          gh release create "${{ steps.release.outputs.tag }}" \
+            "${{ steps.release.outputs.apk }}" \
+            --target "$GITHUB_SHA" \
+            --title "${{ steps.release.outputs.tag }}" \
             --notes-file release-notes.md \
             --generate-notes
