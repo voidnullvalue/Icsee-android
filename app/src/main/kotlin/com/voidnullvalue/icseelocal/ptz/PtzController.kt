@@ -71,11 +71,14 @@ class PtzController(
         runCatching { channel.sendJson(DvripMessageIds.PTZ_CONTROL_REQUEST, json) }
     }
 
+    private fun userDirection(command: PtzCommand): PtzCommand =
+        if (PtzSettings.inverted) command.invertedDirection() else command
+
     // --- UI-facing intent entry points ---
-    fun onPointerDown(command: PtzCommand, step: Int) = enqueue(PtzIntent.Move(command, step))
+    fun onPointerDown(command: PtzCommand, step: Int) = enqueue(PtzIntent.Move(userDirection(command), step))
     fun onPointerUp() = enqueue(PtzIntent.Stop)
     fun onPointerCancel() = enqueue(PtzIntent.Stop)
-    fun onDirectionChange(command: PtzCommand, step: Int) = enqueue(PtzIntent.Stop, PtzIntent.Move(command, step))
+    fun onDirectionChange(command: PtzCommand, step: Int) = enqueue(PtzIntent.Stop, PtzIntent.Move(userDirection(command), step))
     fun onForegroundLost() = enqueue(PtzIntent.Stop)
     fun onScreenDisposed() = enqueue(PtzIntent.Stop)
 

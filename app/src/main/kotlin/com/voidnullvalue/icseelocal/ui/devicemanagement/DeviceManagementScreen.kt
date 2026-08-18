@@ -35,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,11 +48,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.voidnullvalue.icseelocal.model.ConnectionState
+import com.voidnullvalue.icseelocal.ptz.PtzSettings
 import com.voidnullvalue.icseelocal.ui.components.AppScaffold
 import com.voidnullvalue.icseelocal.ui.components.GradientButton
 import com.voidnullvalue.icseelocal.ui.components.NavTile
@@ -76,6 +79,8 @@ fun DeviceManagementScreen(
     // also unmounts when navigating to ConfigEditor/ImageSettings/PlaybackBrowser
     // (same family, same session must keep running).
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
+    var invertPtz by remember { mutableStateOf(PtzSettings.isInverted(context)) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     var showUsernameDialog by remember { mutableStateOf(false) }
 
@@ -93,6 +98,30 @@ fun DeviceManagementScreen(
             }
             state.errorMessage?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp)) }
             state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp)) }
+
+            SectionCard(title = "General", icon = Icons.Default.Tune) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Invert PTZ controls", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Reverse pan and tilt directions",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = invertPtz,
+                        onCheckedChange = { checked ->
+                            invertPtz = checked
+                            PtzSettings.setInverted(context, checked)
+                        },
+                    )
+                }
+            }
 
             SectionCard(title = "Device info", icon = Icons.Default.Info) {
                 val info = state.systemInfo
