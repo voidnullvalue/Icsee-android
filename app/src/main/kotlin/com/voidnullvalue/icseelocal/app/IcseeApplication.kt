@@ -1,6 +1,7 @@
 package com.voidnullvalue.icseelocal.app
 
 import android.app.Application
+import com.voidnullvalue.icseelocal.ptz.PtzSettings
 import com.voidnullvalue.icseelocal.session.CameraSessionRegistry
 
 class IcseeApplication : Application() {
@@ -11,4 +12,9 @@ class IcseeApplication : Application() {
      * screen coming or going. See [CameraSessionRegistry].
      */
     val sessionRegistry: CameraSessionRegistry by lazy { CameraSessionRegistry() }
+
+    override fun onCreate() {
+        super.onCreate()
+        PtzSettings.initialize(this)
+    }
 }
