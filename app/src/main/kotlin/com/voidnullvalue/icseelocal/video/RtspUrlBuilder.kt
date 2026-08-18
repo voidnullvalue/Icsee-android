@@ -45,5 +45,5 @@ object RtspUrlBuilder {
 
     /** Percent-encode a path component; spaces as `%20` (not `+`). */
     internal fun encodeComponent(value: String): String =
-        URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20")
+        URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
 }

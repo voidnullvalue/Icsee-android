@@ -694,89 +694,105 @@ private fun ControlsPanel(
     onToggleLight: () -> Unit,
     onLongPressLight: () -> Unit,
 ) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (state is ConnectionState.Failed || state is ConnectionState.Disconnected) {
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        val hasStatusMessage = state is ConnectionState.Failed ||
+            state is ConnectionState.Disconnected ||
+            talkError != null
+        val useScrollableLayout = maxHeight < 300.dp || hasStatusMessage
+        val scrollState = rememberScrollState()
+        val panelModifier = if (useScrollableLayout) {
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+        } else {
+            Modifier.fillMaxSize()
+        }
+
+        Column(
+            panelModifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = if (useScrollableLayout) {
+                Arrangement.spacedBy(8.dp)
+            } else {
+                Arrangement.SpaceEvenly
+            },
+        ) {
+            if (state is ConnectionState.Failed || state is ConnectionState.Disconnected) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.errorContainer)
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        (state as? ConnectionState.Failed)?.reason ?: state.label,
+                        Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        fontSize = 12.sp,
+                    )
+                    Button(onClick = onReconnect) { Text("Reconnect", fontSize = 12.sp) }
+                }
+            }
+            talkError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.errorContainer)
-                    .padding(8.dp),
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    (state as? ConnectionState.Failed)?.reason ?: state.label,
-                    Modifier.weight(1f),
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    fontSize = 12.sp,
-                )
-                Button(onClick = onReconnect) { Text("Reconnect", fontSize = 12.sp) }
+                CompactPtzPad(onPtzDown, onPtzUp, onPtzCancel, Modifier.weight(1f, fill = false))
+                CompactPresets(presetThumbs, presetThumbEpoch, onGotoPreset, onSavePreset, Modifier.weight(1f))
             }
-        }
-        talkError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
 
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CompactPtzPad(onPtzDown, onPtzUp, onPtzCancel, Modifier.weight(1f, fill = false))
-            CompactPresets(presetThumbs, presetThumbEpoch, onGotoPreset, onSavePreset, Modifier.weight(1f))
-        }
-
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            MiniToggle(
-                icon = Icons.Default.Repeat,
-                active = cruiseActive,
-                label = "Cruise",
-                onClick = onToggleCruise,
-            )
-            Box(
-                Modifier.combinedClickable(
-                    onClick = onToggleLight,
-                    onLongClick = onLongPressLight,
-                ),
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 MiniToggle(
-                    icon = if (lightOn) Icons.Default.LightMode else Icons.Default.DarkMode,
-                    active = lightOn || lightingSupported,
-                    label = when {
-                        !lightingSupported -> "Light?"
-                        lightOn -> "Light on"
-                        else -> "Light"
-                    },
-                    onClick = onToggleLight,
+                    icon = Icons.Default.Repeat,
+                    active = cruiseActive,
+                    label = "Cruise",
+                    onClick = onToggleCruise,
+                )
+                Box(
+                    Modifier.combinedClickable(
+                        onClick = onToggleLight,
+                        onLongClick = onLongPressLight,
+                    ),
+                ) {
+                    MiniToggle(
+                        icon = if (lightOn) Icons.Default.LightMode else Icons.Default.DarkMode,
+                        active = lightOn || lightingSupported,
+                        label = when {
+                            !lightingSupported -> "Light?"
+                            lightOn -> "Light on"
+                            else -> "Light"
+                        },
+                        onClick = onToggleLight,
+                    )
+                }
+                Text(
+                    lightingSummary,
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
                 )
             }
-            Text(
-                lightingSummary,
-                fontSize = 10.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-                maxLines = 2,
-            )
-        }
 
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Speed", fontSize = 12.sp, modifier = Modifier.width(48.dp))
-            Slider(
-                value = speed.toFloat(),
-                onValueChange = { onSpeed(it.toInt()) },
-                valueRange = 0f..10f,
-                steps = 9,
-                modifier = Modifier.weight(1f),
-            )
-            Text("$speed", fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(20.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Speed", fontSize = 12.sp, modifier = Modifier.width(48.dp))
+                Slider(
+                    value = speed.toFloat(),
+                    onValueChange = { onSpeed(it.toInt()) },
+                    valueRange = 0f..10f,
+                    steps = 9,
+                    modifier = Modifier.weight(1f),
+                )
+                Text("$speed", fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(20.dp))
+            }
         }
     }
 }

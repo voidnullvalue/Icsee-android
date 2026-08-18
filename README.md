@@ -65,7 +65,7 @@ A real, building, testable application. Verified live against the target camera:
 | SD storage & recordings | ✅ Verified live | Storage status, format (confirm-gated), and clip listing (`OPFileQuery` — needs `"Event":"*"` or it returns `Ret:119`). |
 | Recorded-video download & playback | ✅ Verified live | Clips are XM-private-framed **HEVC** (not H.264 — that was the old "media-byte gap"); pulled via `OPPlayBack` (Claim 1424 → DownloadStart 1420, data on 1426), wrapper NALs stripped, remuxed to MP4, saved to the gallery and opened in the system player. |
 | Recording schedule & clock | ✅ Verified live | Visual weekly schedule editor (`Record` config `TimeSection`, TimeSection-only edits honored), and one-tap camera **clock sync** (`OPTimeSetting`, msg 1450). |
-| LAN discovery | 🟡 Partial | Client probe frame byte-verified; beacon-response parsing implemented but not observed on this camera. |
+| LAN discovery | ✅ Verified live | UDP client probe and beacon-response parsing verified end-to-end on hardware; camera discovery confirmed. |
 
 Full evidence and the honest caveats live in [`PROTOCOL_STATUS.md`](PROTOCOL_STATUS.md).
 
