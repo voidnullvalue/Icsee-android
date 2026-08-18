@@ -5,7 +5,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -20,7 +25,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.Box
 
 /**
  * A single press-and-hold PTZ direction/stop button. Uses the low-level
@@ -29,9 +33,14 @@ import androidx.compose.foundation.layout.Box
  * "move while held, stop on release" semantics. While held it lights up in
  * the accent colour so the control feels responsive. Keyed by `Unit` so
  * recomposition never restarts (and therefore never resends) the gesture.
+ *
+ * PTZ buttons share the width of their row instead of using a fixed diameter.
+ * This lets the 3x3 pad consume its half of the controls row, which in turn
+ * keeps the preset grid aligned to the right edge instead of leaving unused
+ * horizontal space after it.
  */
 @Composable
-fun PtzPadButton(
+fun RowScope.PtzPadButton(
     icon: ImageVector,
     contentDescription: String,
     onDown: () -> Unit,
@@ -49,7 +58,9 @@ fun PtzPadButton(
     val fg = if (pressed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     Box(
         modifier
-            .size(sizeDp.dp)
+            .weight(1f)
+            .aspectRatio(1f)
+            .defaultMinSize(minWidth = sizeDp.dp, minHeight = sizeDp.dp)
             .clip(CircleShape)
             .background(bg)
             .pointerInput(Unit) {
