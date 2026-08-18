@@ -25,4 +25,17 @@ enum class PtzCommand(val wireValue: String) {
 
     /** Tour = 1 for commands containing "Tour", 0 otherwise -- per the task brief's parameter rules. */
     val isTour: Boolean get() = wireValue.contains("Tour")
+
+    /** Reverse both pan and tilt while leaving zoom/focus/preset/tour commands untouched. */
+    fun invertedDirection(): PtzCommand = when (this) {
+        DIRECTION_UP -> DIRECTION_DOWN
+        DIRECTION_DOWN -> DIRECTION_UP
+        DIRECTION_LEFT -> DIRECTION_RIGHT
+        DIRECTION_RIGHT -> DIRECTION_LEFT
+        DIRECTION_LEFT_UP -> DIRECTION_RIGHT_DOWN
+        DIRECTION_LEFT_DOWN -> DIRECTION_RIGHT_UP
+        DIRECTION_RIGHT_UP -> DIRECTION_LEFT_DOWN
+        DIRECTION_RIGHT_DOWN -> DIRECTION_LEFT_UP
+        else -> this
+    }
 }
