@@ -48,6 +48,9 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.East
@@ -76,6 +79,7 @@ import androidx.compose.material.icons.filled.West
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -92,6 +96,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -546,6 +551,8 @@ fun LiveControlScreen(
                         onSelectDay = deviceManagementViewModel::selectRecordingDay,
                         onPlay = deviceManagementViewModel::playClip,
                         onDownload = deviceManagementViewModel::downloadClip,
+                        onPlayRange = deviceManagementViewModel::playTimeRange,
+                        onDownloadRange = deviceManagementViewModel::downloadTimeRange,
                     )
                     LiveBottomTab.Saved -> SavedMediaPanel(
                         items = localMedia,
@@ -917,6 +924,8 @@ private fun LiveRecordingsPanel(
     onSelectDay: (String) -> Unit,
     onPlay: (RecordedFile) -> Unit,
     onDownload: (RecordedFile) -> Unit,
+    onPlayRange: (date: String, startTime: String, endTime: String) -> Unit = { _, _, _ -> },
+    onDownloadRange: (date: String, startTime: String, endTime: String) -> Unit = { _, _, _ -> },
 ) {
     val all = clips.orEmpty()
     val dayKeys = remember(all) { all.map { it.dayKey }.distinct().sortedDescending() }
@@ -934,6 +943,13 @@ private fun LiveRecordingsPanel(
             }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+
+        TimeRangeExportCard(
+            selectedDay = day,
+            busy = busy,
+            onPlay = onPlayRange,
+            onDownload = onDownloadRange,
+        )
 
         if (dayKeys.isNotEmpty()) {
             Row(
@@ -1329,4 +1345,112 @@ private fun FunkytownDanceDialog(onDismiss: () -> Unit, onStart: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun TimeRangeExportCard(
+    selectedDay: String?,
+    busy: Boolean,
+    onPlay: (date: String, startTime: String, endTime: String) -> Unit,
+    onDownload: (date: String, startTime: String, endTime: String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var startHour by remember { mutableIntStateOf(0) }
+    var startMinute by remember { mutableIntStateOf(0) }
+    var endHour by remember { mutableIntStateOf(23) }
+    var endMinute by remember { mutableIntStateOf(59) }
+
+    val day = selectedDay ?: return
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Export by time range", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+
+        if (expanded) {
+            Spacer(Modifier.height(6.dp))
+            Text("Date: $day", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("Start", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TimeSpinner(hour = startHour, minute = startMinute, onHourChange = { startHour = it }, onMinuteChange = { startMinute = it })
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("End", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TimeSpinner(hour = endHour, minute = endMinute, onHourChange = { endHour = it }, onMinuteChange = { endMinute = it })
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val startStr = "%02d:%02d".format(startHour, startMinute)
+                val endStr = "%02d:%02d".format(endHour, endMinute)
+                val valid = startHour < endHour || (startHour == endHour && startMinute < endMinute)
+                OutlinedButton(
+                    onClick = { onPlay(day, startStr, endStr) },
+                    enabled = !busy && valid,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Play", fontSize = 12.sp)
+                }
+                Button(
+                    onClick = { onDownload(day, startStr, endStr) },
+                    enabled = !busy && valid,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimary)
+                    Spacer(Modifier.width(4.dp))
+                    Text("Save", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimeSpinner(hour: Int, minute: Int, onHourChange: (Int) -> Unit, onMinuteChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        NumberSpinnerField(value = hour, range = 0..23, onChange = onHourChange, modifier = Modifier.width(44.dp))
+        Text(":", fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 2.dp))
+        NumberSpinnerField(value = minute, range = 0..59, onChange = onMinuteChange, modifier = Modifier.width(44.dp))
+    }
+}
+
+@Composable
+private fun NumberSpinnerField(value: Int, range: IntRange, onChange: (Int) -> Unit, modifier: Modifier = Modifier) {
+    var text by remember(value) { mutableStateOf("%02d".format(value)) }
+    androidx.compose.material3.OutlinedTextField(
+        value = text,
+        onValueChange = { raw ->
+            val digits = raw.filter { it.isDigit() }.take(2)
+            text = digits
+            digits.toIntOrNull()?.coerceIn(range)?.let(onChange)
+        },
+        modifier = modifier.height(44.dp),
+        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+    )
 }

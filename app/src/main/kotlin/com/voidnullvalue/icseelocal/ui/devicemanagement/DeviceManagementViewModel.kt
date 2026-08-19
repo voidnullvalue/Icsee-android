@@ -1095,6 +1095,224 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
     }
 
     /**
+     * Stream/play all clips that overlap [date] between [startTime] and [endTime].
+     * Queries matching clips then downloads+concatenates them into one playable MP4.
+     *
+     * @param date "yyyy-MM-dd"
+     * @param startTime "HH:mm" (e.g. "08:30")
+     * @param endTime "HH:mm" (e.g. "14:00")
+     */
+    fun playTimeRange(date: String, startTime: String, endTime: String) {
+        val begin = "$date $startTime:00"
+        val end = "$date $endTime:59"
+        if (_state.value.downloadingClip != null) {
+            _state.value = _state.value.copy(playError = "Wait for the download to finish first.")
+            return
+        }
+        thumbPrefetchJob?.cancel()
+        streamPlayJob?.cancel()
+        playCacheFile = null
+        _state.value = _state.value.copy(
+            playUri = null,
+            playBuffering = true,
+            playProgressBytes = 0,
+            playTitle = "$date $startTime–$endTime",
+            playError = null,
+        )
+        streamPlayJob = viewModelScope.launch {
+            try {
+                val ready = ensurePlaybackSession()
+                if (ready == null) {
+                    _state.value = _state.value.copy(playBuffering = false, playError = "Couldn't reach camera.")
+                    return@launch
+                }
+                val sid = ready.sessionId
+                val ch = camera?.channel ?: 0
+                val clips = queryTimeRange(ready.transport, ready.channel, sid, ch, begin, end)
+                if (clips.isEmpty()) {
+                    _state.value = _state.value.copy(playBuffering = false, playError = "No recordings in $startTime–$endTime on $date.")
+                    return@launch
+                }
+                val finalFile = withContext(Dispatchers.IO) {
+                    sdDownloadMutex.withLock {
+                        val app = getApplication<Application>()
+                        val cache = File(app.cacheDir, "range_stream").also { it.mkdirs() }
+                        cache.listFiles()?.forEach { runCatching { it.delete() } }
+                        val exporter = RecordedClipExporter(ready.transport, ready.channel, ready.sessionId)
+                        downloadAndConcatClips(exporter, clips, cache, begin, end) { bytes ->
+                            _state.value = _state.value.copy(playProgressBytes = bytes)
+                        }
+                    }
+                }
+                playCacheFile = finalFile
+                _state.value = _state.value.copy(
+                    playUri = android.net.Uri.fromFile(finalFile).toString(),
+                    playBuffering = false,
+                    playError = null,
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(playBuffering = false, playError = e.message ?: "Playback failed")
+            }
+        }
+    }
+
+    /**
+     * Download all clips overlapping [date] between [startTime] and [endTime]
+     * into the device gallery as a single MP4.
+     */
+    fun downloadTimeRange(date: String, startTime: String, endTime: String) {
+        val begin = "$date $startTime:00"
+        val end = "$date $endTime:59"
+        if (_state.value.downloadingClip != null || _state.value.playBuffering) {
+            _state.value = _state.value.copy(errorMessage = "Another operation is in progress.")
+            return
+        }
+        val cameraId = camera?.id ?: return
+        thumbPrefetchJob?.cancel()
+        streamPlayJob?.cancel()
+        _state.value = _state.value.copy(
+            downloadingClip = "range", downloadProgressBytes = 0,
+            errorMessage = null, statusMessage = null, savedVideoUri = null, savedVideoLabel = null,
+        )
+        viewModelScope.launch {
+            try {
+                val ready = ensurePlaybackSession()
+                if (ready == null) {
+                    _state.value = _state.value.copy(downloadingClip = null, errorMessage = "Couldn't reach camera.")
+                    return@launch
+                }
+                val sid = ready.sessionId
+                val ch = camera?.channel ?: 0
+                val clips = queryTimeRange(ready.transport, ready.channel, sid, ch, begin, end)
+                if (clips.isEmpty()) {
+                    _state.value = _state.value.copy(downloadingClip = null, errorMessage = "No recordings in that range.")
+                    return@launch
+                }
+                val result = withContext(Dispatchers.IO) {
+                    sdDownloadMutex.withLock {
+                        val app = getApplication<Application>()
+                        val cache = File(app.cacheDir, "range_download").also { it.mkdirs() }
+                        cache.listFiles()?.forEach { runCatching { it.delete() } }
+                        val exporter = RecordedClipExporter(ready.transport, ready.channel, ready.sessionId)
+                        val mp4 = downloadAndConcatClips(exporter, clips, cache, begin, end) { bytes ->
+                            _state.value = _state.value.copy(downloadProgressBytes = bytes)
+                        }
+                        val name = "icsee_${date.replace("-", "")}_${startTime.replace(":", "")}-${endTime.replace(":", "")}.mp4"
+                        val saved = RecordedVideoStore.save(getApplication(), mp4, name)
+                        runCatching { mp4.delete() }
+                        saved
+                    }
+                }
+                when (result) {
+                    is SavedVideo.Success -> _state.value = _state.value.copy(
+                        savedVideoUri = result.uri, savedVideoLabel = result.label,
+                        statusMessage = "Saved ${date} ${startTime}–${endTime}",
+                    )
+                    is SavedVideo.Failure -> _state.value = _state.value.copy(errorMessage = result.reason)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(errorMessage = e.message ?: "Download failed")
+            }
+            _state.value = _state.value.copy(downloadingClip = null)
+        }
+    }
+
+    private suspend fun queryTimeRange(
+        transport: DvripTransport,
+        channel: DvripCommandChannel,
+        sid: UInt,
+        ch: Int,
+        begin: String,
+        end: String,
+    ): List<RecordedFile> {
+        val date = begin.substringBefore(' ')
+        val (h264, _) = queryDayPaged(transport, channel, sid, ch, date, type = "h264")
+        val clips = h264.ifEmpty {
+            val (h265, _) = queryDayPaged(transport, channel, sid, ch, date, type = "h265")
+            h265
+        }
+        return clips.filter { clip ->
+            clip.endTime >= begin && clip.beginTime <= end
+        }.sortedBy { it.beginTime }
+    }
+
+    private suspend fun downloadAndConcatClips(
+        exporter: RecordedClipExporter,
+        clips: List<RecordedFile>,
+        cacheDir: File,
+        rangeBegin: String,
+        rangeEnd: String,
+        onProgress: (Long) -> Unit,
+    ): File {
+        var totalBytes = 0L
+        val partFiles = ArrayList<File>()
+        for (clip in clips) {
+            val part = File(cacheDir, "part_${partFiles.size}.mp4")
+            exporter.exportToMp4(clip.fileName, clip.beginTime, clip.endTime, part) { bytes ->
+                onProgress(totalBytes + bytes)
+            }
+            totalBytes += part.length()
+            onProgress(totalBytes)
+            partFiles += part
+        }
+        if (partFiles.size == 1) return partFiles.first()
+        val concat = File(cacheDir, "range_${System.currentTimeMillis()}.mp4")
+        concatMp4Files(partFiles, concat)
+        partFiles.forEach { runCatching { it.delete() } }
+        return concat
+    }
+
+    private fun concatMp4Files(inputs: List<File>, output: File) {
+        // Simple append: since all clips share codec config, we re-mux all samples
+        // with adjusted timestamps. This works because all clips are from the same
+        // camera with identical codec settings.
+        val reader = android.media.MediaExtractor()
+        val muxer = android.media.MediaMuxer(output.absolutePath, android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        try {
+            // Use the first file to set up tracks
+            reader.setDataSource(inputs.first().absolutePath)
+            val trackMap = IntArray(reader.trackCount)
+            for (i in 0 until reader.trackCount) {
+                trackMap[i] = muxer.addTrack(reader.getTrackFormat(i))
+            }
+            muxer.start()
+            reader.release()
+
+            var timeOffsetUs = 0L
+            val buf = java.nio.ByteBuffer.allocate(2 * 1024 * 1024)
+            val info = android.media.MediaCodec.BufferInfo()
+
+            for (file in inputs) {
+                val ext = android.media.MediaExtractor()
+                ext.setDataSource(file.absolutePath)
+                var maxPtsUs = 0L
+                for (t in 0 until ext.trackCount) {
+                    ext.selectTrack(t)
+                }
+                while (true) {
+                    val size = ext.readSampleData(buf, 0)
+                    if (size < 0) break
+                    val trackIdx = ext.sampleTrackIndex
+                    val pts = ext.sampleTime + timeOffsetUs
+                    if (pts > maxPtsUs) maxPtsUs = pts
+                    info.set(0, size, pts, ext.sampleFlags)
+                    muxer.writeSampleData(trackMap[trackIdx], buf, info)
+                    ext.advance()
+                }
+                ext.release()
+                timeOffsetUs = maxPtsUs + 33_333 // ~1 frame gap
+            }
+            muxer.stop()
+        } finally {
+            runCatching { muxer.release() }
+        }
+    }
+
+    /**
      * Downloads [clip] off the SD card into the device Movies collection.
      * Does not open the player — use [playClip] for that.
      */
