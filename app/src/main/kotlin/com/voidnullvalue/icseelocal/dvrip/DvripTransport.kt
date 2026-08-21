@@ -48,16 +48,10 @@ class DvripTransport(
     /** Read poll granularity, not a connection-health timeout -- see the receive loop. */
     private val readPollTimeoutMillis: Int = 2000,
     /**
-     * Sequence counter for outgoing frames. DVRIP tracks ONE monotonic
-     * sequence per *session*, shared across every TCP connection that reuses
-     * that session (confirmed in the reference capture: the control connection
-     * ran seq 1008..1352 while the separately-connected video claim continued
-     * it at 1048 and the talk claim at 1240). A media/talk claim arriving with
-     * a stale sequence (e.g. a fresh per-connection 0) is acked Ret:100 but the
-     * stream is never actually activated -- which is exactly why reusing a
-     * session on a new connection with its own counter silently delivered no
-     * media. Pass the session's shared counter here so secondary connections
-     * continue it; defaults to a private counter for standalone use.
+     * Sequence counter for outgoing command frames. DVRIP tracks one monotonic
+     * command sequence per session, shared across TCP connections that reuse
+     * the session. Media payloads whose native protocol fixes sequence to zero
+     * use [send]'s [sequenceOverride] instead.
      */
     private val sequence: AtomicLong = AtomicLong(0),
 ) {
@@ -94,10 +88,14 @@ class DvripTransport(
     fun nextSequence(): UInt = sequence.getAndIncrement().toUInt()
 
     /**
-     * @param sequenceOverride when set, uses this literal sequence instead of
-     *   drawing from the counter. Talk/media *data* frames (msgid 1432/1433)
-     *   are sent with a constant sequence of 0 in the reference capture, unlike
-     *   command frames which consume the monotonic counter.
+     * Sends one DVRIP frame.
+     *
+     * [sequenceOverride] is used by native media protocols whose data frames
+     * carry a literal sequence (AVTalk 1419 uses zero). [headerByte12] and
+     * [headerByte13] expose the protocol-dependent bytes at offsets 12/13;
+     * they default to zero so all existing callers retain their exact wire
+     * format. FunSDK encrypted login uses byte12=0x63, and AVTalk 1419 uses
+     * byte12 as a per-source-frame fragment-group tag.
      */
     suspend fun send(
         session: UInt,
@@ -105,9 +103,19 @@ class DvripTransport(
         payload: ByteArray,
         type: Int = DvripHeader.DEFAULT_TYPE,
         sequenceOverride: UInt? = null,
+        headerByte12: Int = 0,
+        headerByte13: Int = 0,
     ): DvripFrame =
         withContext(Dispatchers.IO) {
-            val frame = DvripFrame.of(session, sequenceOverride ?: nextSequence(), messageId, payload, type)
+            val frame = DvripFrame.of(
+                session = session,
+                sequence = sequenceOverride ?: nextSequence(),
+                messageId = messageId,
+                payload = payload,
+                type = type,
+                headerByte12 = headerByte12,
+                headerByte13 = headerByte13,
+            )
             writeMutex.withLock {
                 val s = socket ?: throw IOException("not connected")
                 if (closed.get()) throw IOException("transport closed")
@@ -132,17 +140,6 @@ class DvripTransport(
             frame
         }
 
-    /**
-     * Owned by this transport for its whole lifetime -- a single
-     * [DvripFrameAssembler] instance persists across every read, so a
-     * partial frame at a read boundary is never silently dropped the way it
-     * would be if a fresh assembler were created per receive-loop
-     * invocation. The socket read timeout is a small poll granularity, not
-     * a connection-health signal: an idle-but-healthy control connection
-     * can legitimately go quiet between keepalives, so a bare read timeout
-     * here just re-checks cancellation and loops rather than treating
-     * idleness as failure. Connection liveness is the keepalive task's job.
-     */
     private suspend fun receiveLoop(s: Socket) {
         val assembler = DvripFrameAssembler()
         val buf = ByteArray(65536)

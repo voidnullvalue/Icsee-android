@@ -7,19 +7,19 @@ import com.voidnullvalue.icseelocal.dvrip.DvripTransport
 import java.util.Base64
 
 /**
- * Sends/receives JSON commands over an authenticated session, applying
- * [SessionCrypto]'s generic envelope when the message id requires it.
- * Wire shape for the encrypted case (base64 ASCII text + single 0x00
- * terminator, as opposed to plaintext JSON's `0x0A 0x00`) is confirmed by
- * evidence -- see PROTOCOL_NOTES.md "Post-login encryption". The AES
- * parameters underneath [SessionCrypto] are not yet confirmed; this class
- * is correct regardless of that, since it only handles the base64/framing
- * layer and delegates the actual cipher operation.
+ * Sends/receives JSON commands over an authenticated session, applying the
+ * negotiated session crypto envelope when required.
+ *
+ * [sequenceProvider] is null for the existing DVRIP stack, preserving its
+ * transport-owned sequence behavior. The recovered FunSDK encrypted/AVTalk
+ * path supplies CXMDevPTL::NewSeq() here so control commands and keepalives
+ * consume the same native +8 sequence used by the secondary AVTalk socket.
  */
 class DvripCommandChannel(
     private val transport: DvripTransport,
     private val sessionId: UInt,
     private val crypto: SessionCrypto,
+    private val sequenceProvider: (() -> UInt)? = null,
 ) {
     suspend fun sendJson(messageId: Int, json: String): DvripFrame {
         val wirePayload = if (crypto.shouldEncrypt(messageId)) {
@@ -28,10 +28,15 @@ class DvripCommandChannel(
         } else {
             DvripPayloads.encodeJson(json)
         }
-        return transport.send(sessionId, messageId, wirePayload)
+        return transport.send(
+            session = sessionId,
+            messageId = messageId,
+            payload = wirePayload,
+            sequenceOverride = sequenceProvider?.invoke(),
+        )
     }
 
-    /** Returns null if the frame's payload doesn't match the expected shape for its encryption status. */
+    /** Returns null if the frame payload does not match its expected wire envelope. */
     fun decodeResponse(frame: DvripFrame): String? {
         return if (crypto.shouldEncrypt(frame.header.messageId)) {
             val base64Text = DvripPayloads.decodeBase64TextOrNull(frame.payload) ?: return null

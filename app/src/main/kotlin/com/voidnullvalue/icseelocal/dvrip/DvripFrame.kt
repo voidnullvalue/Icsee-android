@@ -24,8 +24,16 @@ class DvripFrame(
             "msgId=${header.messageId}, len=${header.payloadLength})"
 
     companion object {
-        fun of(session: UInt, sequence: UInt, messageId: Int, payload: ByteArray, type: Int = DvripHeader.DEFAULT_TYPE): DvripFrame {
-            val header = DvripHeader(type, session, sequence, messageId, payload.size)
+        fun of(
+            session: UInt,
+            sequence: UInt,
+            messageId: Int,
+            payload: ByteArray,
+            type: Int = DvripHeader.DEFAULT_TYPE,
+            headerByte12: Int = 0,
+            headerByte13: Int = 0,
+        ): DvripFrame {
+            val header = DvripHeader(type, session, sequence, messageId, payload.size, headerByte12, headerByte13)
             return DvripFrame(header, payload)
         }
     }
