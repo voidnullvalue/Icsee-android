@@ -16,6 +16,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import java.time.LocalDateTime
 
@@ -38,6 +40,7 @@ class AvTalkClient(
     private val loginNegotiator: FunSdkEncryptedLoginNegotiator = FunSdkEncryptedLoginNegotiator(responseTimeoutMillis),
 ) {
     private val funSdkSequence = FunSdkSequence()
+    private val mediaFrameMutex = Mutex()
     private var controlTransport: DvripTransport? = null
     private var mediaTransport: DvripTransport? = null
     private var controlChannel: DvripCommandChannel? = null
@@ -130,8 +133,12 @@ class AvTalkClient(
      * Sends one complete native CSTDStream frame. FunSDK fragments these at
      * 64 KiB before NewMediaDataPTL; every resulting 1419 DVRIP packet has
      * sequence 0 and the camera reassembles from the frame's own length field.
+     *
+     * The outer mutex is intentionally per source frame, not per DVRIP packet:
+     * phone video and microphone capture run concurrently, and an audio packet
+     * must never be interleaved between fragments of one large H.265 frame.
      */
-    private suspend fun sendMediaFrame(frame: ByteArray) {
+    private suspend fun sendMediaFrame(frame: ByteArray) = mediaFrameMutex.withLock {
         check(isActive) { "AVTalk has not completed Start" }
         val media = checkNotNull(mediaTransport) { "AVTalk media transport is not connected" }
         val sid = checkNotNull(sessionId)
@@ -158,6 +165,9 @@ class AvTalkClient(
         keepalive?.stop()
         keepalive = null
         isActive = false
+        // Drain any source frame already inside the frame-level send mutex so
+        // AVTalk Stop is ordered strictly after the final complete 1419 frame.
+        mediaFrameMutex.withLock { }
         if (control != null && channel != null && sid != null) {
             try {
                 requestEncrypted(
