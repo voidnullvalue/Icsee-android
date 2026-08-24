@@ -30,7 +30,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -271,7 +270,7 @@ fun LiveControlScreen(
     DisposableEffect(fullscreen) {
         val window = activity?.window
         if (fullscreen) {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
             fsChromeVisible = true
             if (window != null) {
                 WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -304,8 +303,7 @@ fun LiveControlScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color.Black)
-            .navigationBarsPadding(),
+            .background(Color.Black),
     ) {
         if (!fullscreen) {
             Row(
