@@ -67,6 +67,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.South
@@ -85,6 +86,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -160,6 +162,7 @@ fun LiveControlScreen(
     onOpenImageSettings: () -> Unit,
     onOpenMotionDetect: () -> Unit,
     onOpenFullRecordings: () -> Unit,
+    onOpenAvTalk: (() -> Unit)?,
     onBack: () -> Unit,
     viewModel: LiveControlViewModel = viewModel(),
     deviceManagementViewModel: DeviceManagementViewModel = viewModel(),
@@ -523,6 +526,7 @@ fun LiveControlScreen(
                         onPtzCancel = viewModel::onPtzCancel,
                         onGotoPreset = viewModel::gotoPreset,
                         onSavePreset = viewModel::setPreset,
+                        onOpenAvTalk = onOpenAvTalk,
                         onSpeed = viewModel::setSpeedStep,
                         onToggleCruise = viewModel::toggleCruise,
                         onToggleLight = viewModel::toggleLight,
@@ -683,6 +687,7 @@ private fun ControlsPanel(
     onPtzCancel: () -> Unit,
     onGotoPreset: (Int) -> Unit,
     onSavePreset: (Int) -> Unit,
+    onOpenAvTalk: (() -> Unit)?,
     onSpeed: (Int) -> Unit,
     onToggleCruise: () -> Unit,
     onToggleLight: () -> Unit,
@@ -736,7 +741,14 @@ private fun ControlsPanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CompactPtzPad(onPtzDown, onPtzUp, onPtzCancel, Modifier.weight(1f, fill = false))
-                CompactPresets(presetThumbs, presetThumbEpoch, onGotoPreset, onSavePreset, Modifier.weight(1f))
+                CompactPresets(
+                    thumbs = presetThumbs,
+                    thumbEpoch = presetThumbEpoch,
+                    onGoto = onGotoPreset,
+                    onSave = onSavePreset,
+                    onOpenAvTalk = onOpenAvTalk,
+                    modifier = Modifier.weight(1f),
+                )
             }
 
             Row(
@@ -828,6 +840,7 @@ private fun CompactPresets(
     thumbEpoch: Long,
     onGoto: (Int) -> Unit,
     onSave: (Int) -> Unit,
+    onOpenAvTalk: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -886,6 +899,16 @@ private fun CompactPresets(
                         )
                     }
                 }
+            }
+        }
+        onOpenAvTalk?.let { openAvTalk ->
+            OutlinedButton(
+                onClick = openAvTalk,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.ScreenShare, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Send to screen", fontSize = 12.sp)
             }
         }
         Text(
