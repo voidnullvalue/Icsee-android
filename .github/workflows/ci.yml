@@ -34,6 +34,14 @@ jobs:
       - name: Unit tests + lint + assemble
         run: ./gradlew testDebugUnitTest lintDebug assembleDebug
 
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: icsee-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
       - name: Upload test/lint reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
