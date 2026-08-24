@@ -26,6 +26,8 @@ or live-probed bytes documented in [`PROTOCOL_NOTES.md`](PROTOCOL_NOTES.md).
 
 Special thanks goes to my wife for hitting the reset button on the camera lots of times at odd hours.
 
+**AVTalk credit:** major thanks to [@jericjan](https://github.com/jericjan) for reverse-engineering the AVTalk protocol, providing the working `main.py` reference implementation, testing the Android port on real AVTalk-capable hardware, and reporting the client-preview rotation bug that led to the final fix.
+
 ## Contents
 
 - [Download](#download)
@@ -56,6 +58,7 @@ A real, building, testable application. Verified live against the target camera:
 | PTZ pan / tilt | ✅ Verified live | 8-direction movement and stop confirmed via `Ret` codes (and visible motion on-device). |
 | Live video | ✅ Verified live | RTSP (H.265 + PCMA) via `androidx.media3`. DVRIP's own media channel claims OK but delivered no bytes on this camera, so RTSP is the real path. |
 | Push-to-talk | ✅ Verified **audible** | Non-obvious: OPTalk *Claim* (1434) returns `Ret: 100` but leaves the speaker shut — a plaintext OPTalk **`Start`** (1430) opens it, then G.711 A-law frames play out loud. |
+| AVTalk phone → camera | ✅ Verified on hardware | Sends the Android phone camera as H.265/HEVC and microphone as G.711 A-law to compatible cameras with a built-in display/speaker. Three DVRIP sockets share one session: control, OPMonitor, and AVTalk media. Hardware-tested by `@jericjan`; see [`AVTALK.md`](AVTALK.md). |
 | BLE Wi-Fi provisioning | ✅ Verified on hardware | App scans, connects, sends Wi-Fi credentials over BLE, and the **camera joins the router**. It drops BLE before reporting its own login, so the app falls back to `admin`/no-password to reach it over LAN, then independently recovers and displays the **real** provisioned account (username + plaintext password) via `GetRandomUser` + AES decryption — see `SECURITY.md`. |
 | Keepalive / reconnect | ✅ Verified live | `1006` keepalive `Ret: 100`; bounded-backoff reconnect. |
 | PTZ presets | ✅ Verified live | `OPPTZControl` Set/Goto/Clear preset — `Ret: 100`. |
@@ -88,6 +91,7 @@ Full evidence and the honest caveats live in [`PROTOCOL_STATUS.md`](PROTOCOL_STA
 - 🎮 **PTZ** — 8-direction press-and-hold pad, stop-on-release, adjustable speed, **presets** (tap-recall / hold-save)
 - 🎥 **Live video** — RTSP (H.265 + PCMA) via `androidx.media3` / `PlayerView`; **full-screen drag-to-steer** PTZ
 - 🎙️ **Push-to-talk** — dedicated talk connection, OPTalk Claim + Start handshake, G.711 A-law upstream
+- 📲 **AVTalk phone → camera broadcasting** — sends the phone camera as H.265/HEVC plus microphone audio as G.711 A-law to compatible camera screens/speakers; hardware-verified, with front/back lens switching and corrected local preview orientation
 - 📶 **BLE pairing / Wi-Fi provisioning** — scanner + GATT choreography matched to the factory app; recovers and displays the real provisioned account (not just the factory backdoor) via `GetRandomUser` + AES decryption, independent of BLE ACK capture
 - 🛠️ **Device management** — device info, time, reboot, **username / password change**, and a generic get/set editor for any named DVRIP config
 - 📖 **Typed setting controls** — protocol keys shown with friendly labels + descriptions, and edited with the right control for the type: switches for on/off flags, dropdowns for enums, sliders for numeric ranges (no raw hex)
@@ -146,6 +150,7 @@ app/src/main/kotlin/com/voidnullvalue/icseelocal/
   ptz/         OPPTZControl JSON builder, press-and-hold controller
   video/       RTSP player, media stream reassembly, snapshot capture, recorded-clip download + HEVC→MP4 remux
   audio/       G.711 A-law codec, talk-frame wrapping, microphone capture, talk controller
+  avtalk/      Phone-camera HEVC source, AVTalk control/media client, frame wrappers, live broadcaster
   ble/         BLE scanner (manufacturer-data beacon match), pairing/Wi-Fi provisioning client + codec
   storage/     Keystore-backed credential storage, DataStore for non-sensitive prefs
 ```
@@ -156,6 +161,7 @@ app/src/main/kotlin/com/voidnullvalue/icseelocal/
 |---|---|
 | [`PROTOCOL_NOTES.md`](PROTOCOL_NOTES.md) | The evidence — pcap + live findings, with exact bytes |
 | [`PROTOCOL_STATUS.md`](PROTOCOL_STATUS.md) | Feature-by-feature verified/blocked status |
+| [`AVTALK.md`](AVTALK.md) | Verified phone-to-camera AVTalk flow, media framing, orientation behavior, and contributor credit |
 | [`PASSWORD_CHANGE_RE.md`](PASSWORD_CHANGE_RE.md) | How credential change works on this firmware (via `ChangeRandomUser`, msg 1660 — the `ModifyPassword` variants that only ACK `Ret:100` don't stick) and why the backdoor makes it moot |
 | [`BUILDING_IN_PROOT.md`](BUILDING_IN_PROOT.md) | ARM64 toolchain setup details |
 | [`TESTING.md`](TESTING.md) | Unit tests + opt-in live hardware tests |
