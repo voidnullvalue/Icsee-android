@@ -88,8 +88,15 @@ class PhoneCameraHevcSource(
         try {
             val selection = selectCamera(lens)
             val captureSize = chooseCaptureSize(selection.characteristics)
-            val rotation = relativeRotation(selection.characteristics, lens, textureView)
-            configurePreviewTransform(textureView, captureSize, rotation, lens == AvTalkLens.FRONT)
+            val frameRotationDegrees = relativeRotation(selection.characteristics, lens, textureView)
+            val displayRotationDegrees = displayRotationDegrees(textureView)
+            configurePreviewTransform(
+                textureView,
+                captureSize,
+                frameRotationDegrees,
+                displayRotationDegrees,
+                lens == AvTalkLens.FRONT,
+            )
             configureEncoder()
 
             val reader = ImageReader.newInstance(
@@ -99,7 +106,7 @@ class PhoneCameraHevcSource(
                 3,
             )
             imageReader = reader
-            reader.setOnImageAvailableListener({ r -> onImageAvailable(r, rotation) }, handler)
+            reader.setOnImageAvailableListener({ r -> onImageAvailable(r, frameRotationDegrees) }, handler)
 
             val surfaceTexture = checkNotNull(textureView.surfaceTexture)
             surfaceTexture.setDefaultBufferSize(captureSize.width, captureSize.height)
@@ -214,19 +221,23 @@ class PhoneCameraHevcSource(
         textureView: TextureView,
     ): Int {
         val sensor = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        @Suppress("DEPRECATION")
-        val displayRotation = textureView.display?.rotation
-            ?: (appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
-        val deviceDegrees = when (displayRotation) {
-            Surface.ROTATION_90 -> 90
-            Surface.ROTATION_180 -> 180
-            Surface.ROTATION_270 -> 270
-            else -> 0
-        }
+        val deviceDegrees = displayRotationDegrees(textureView)
         return if (lens == AvTalkLens.FRONT) {
             (sensor + deviceDegrees) % 360
         } else {
             (sensor - deviceDegrees + 360) % 360
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun displayRotationDegrees(textureView: TextureView): Int {
+        val displayRotation = textureView.display?.rotation
+            ?: (appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
+        return when (displayRotation) {
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
         }
     }
 
@@ -243,12 +254,13 @@ class PhoneCameraHevcSource(
     private fun configurePreviewTransform(
         textureView: TextureView,
         bufferSize: Size,
-        rotation: Int,
+        frameRotationDegrees: Int,
+        displayRotationDegrees: Int,
         mirror: Boolean,
     ) {
         val viewWidth = textureView.width.toFloat().coerceAtLeast(1f)
         val viewHeight = textureView.height.toFloat().coerceAtLeast(1f)
-        val rotated = rotation == 90 || rotation == 270
+        val rotated = frameRotationDegrees == 90 || frameRotationDegrees == 270
         val bufferWidth = if (rotated) bufferSize.height.toFloat() else bufferSize.width.toFloat()
         val bufferHeight = if (rotated) bufferSize.width.toFloat() else bufferSize.height.toFloat()
         val viewRect = RectF(0f, 0f, viewWidth, viewHeight)
@@ -260,7 +272,10 @@ class PhoneCameraHevcSource(
         matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
         val scale = max(viewWidth / bufferWidth, viewHeight / bufferHeight)
         matrix.postScale(scale, scale, centerX, centerY)
-        matrix.postRotate(rotation.toFloat(), centerX, centerY)
+        // TextureView already applies the camera sensor's SurfaceTexture transform.
+        // Only compensate for display rotation here; applying frameRotationDegrees
+        // again double-rotates the local preview while the ImageReader uplink stays correct.
+        matrix.postRotate(-displayRotationDegrees.toFloat(), centerX, centerY)
         if (mirror) matrix.postScale(-1f, 1f, centerX, centerY)
         textureView.setTransform(matrix)
     }
