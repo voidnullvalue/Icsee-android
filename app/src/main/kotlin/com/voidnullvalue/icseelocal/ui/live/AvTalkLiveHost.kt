@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -34,7 +33,6 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -69,8 +67,8 @@ import com.voidnullvalue.icseelocal.model.CameraDescriptor
 import com.voidnullvalue.icseelocal.ui.devicemanagement.DeviceManagementViewModel
 
 /**
- * Live-screen host that adds the AVTalk entry point without coupling the large
- * existing [LiveControlScreen] to Camera2/MediaCodec details.
+ * Live-screen host that wires the AVTalk dialog into the live controls without
+ * coupling [LiveControlScreen] to Camera2/MediaCodec details.
  */
 @UnstableApi
 @Composable
@@ -88,31 +86,18 @@ fun LiveControlWithAvTalk(
     val camera by liveControlViewModel.camera.collectAsState()
     var avTalkOpen by rememberSaveable(cameraId) { mutableStateOf(false) }
 
-    Box(Modifier.fillMaxSize()) {
-        LiveControlScreen(
-            cameraId = cameraId,
-            onOpenDiagnostics = onOpenDiagnostics,
-            onOpenDeviceManagement = onOpenDeviceManagement,
-            onOpenImageSettings = onOpenImageSettings,
-            onOpenMotionDetect = onOpenMotionDetect,
-            onOpenFullRecordings = onOpenFullRecordings,
-            onBack = onBack,
-            viewModel = liveControlViewModel,
-            deviceManagementViewModel = deviceManagementViewModel,
-        )
-
-        if (camera != null) {
-            ExtendedFloatingActionButton(
-                onClick = { avTalkOpen = true },
-                icon = { Icon(Icons.Default.ScreenShare, contentDescription = null) },
-                text = { Text("Send to screen") },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(top = 52.dp, end = 10.dp),
-            )
-        }
-    }
+    LiveControlScreen(
+        cameraId = cameraId,
+        onOpenDiagnostics = onOpenDiagnostics,
+        onOpenDeviceManagement = onOpenDeviceManagement,
+        onOpenImageSettings = onOpenImageSettings,
+        onOpenMotionDetect = onOpenMotionDetect,
+        onOpenFullRecordings = onOpenFullRecordings,
+        onOpenAvTalk = camera?.let { { avTalkOpen = true } },
+        onBack = onBack,
+        viewModel = liveControlViewModel,
+        deviceManagementViewModel = deviceManagementViewModel,
+    )
 
     if (avTalkOpen) {
         camera?.let { descriptor ->
