@@ -209,7 +209,6 @@ fun LiveControlScreen(
 
     fun clampPan(raw: Offset, s: Float): Offset {
         if (s <= 1.01f || viewportSize.width == 0) return Offset.Zero
-        // With center-origin scale, max translation keeps edges reachable.
         val maxX = viewportSize.width * (s - 1f) / 2f
         val maxY = viewportSize.height * (s - 1f) / 2f
         return Offset(
@@ -246,7 +245,6 @@ fun LiveControlScreen(
             }
         }
     }
-    // Auto-hide fullscreen chrome after a few seconds of no interaction.
     LaunchedEffect(fullscreen, fsChromeVisible) {
         if (fullscreen && fsChromeVisible) {
             kotlinx.coroutines.delay(3500)
@@ -254,7 +252,6 @@ fun LiveControlScreen(
         }
     }
 
-    // Keep the display awake while live video is playing (or fullscreen / clip player open).
     val keepAwake = fullscreen ||
         rtspState is RtspPlayerState.Playing ||
         dmState.playUri != null ||
@@ -271,8 +268,6 @@ fun LiveControlScreen(
         }
     }
 
-    // Immersive chrome + force landscape in fullscreen. configChanges on the
-    // Activity keeps the nav stack alive across the orientation change.
     DisposableEffect(fullscreen) {
         val window = activity?.window
         if (fullscreen) {
@@ -312,7 +307,6 @@ fun LiveControlScreen(
             .background(Color.Black)
             .navigationBarsPadding(),
     ) {
-        // Top chrome sits *above* the stream (not overlaid) except in fullscreen.
         if (!fullscreen) {
             Row(
                 Modifier
@@ -363,7 +357,6 @@ fun LiveControlScreen(
             }
         }
 
-        // —— Video only (no overlapping controls in normal mode) ——
         Box(
             Modifier
                 .fillMaxWidth()
@@ -412,7 +405,6 @@ fun LiveControlScreen(
                 VideoSurface(viewModel, rtspState, Modifier.fillMaxSize())
             }
 
-            // Fullscreen-only chrome (tap to show/hide) so landscape exit still works.
             if (fullscreen) {
                 androidx.compose.animation.AnimatedVisibility(
                     visible = fsChromeVisible,
@@ -454,7 +446,6 @@ fun LiveControlScreen(
         }
 
         if (!fullscreen) {
-            // —— Action row directly under stream (zoom / fullscreen live here) ——
             StreamActionRow(
                 mainStream = camera?.streamType != StreamType.SUB,
                 muted = muted,
@@ -481,7 +472,6 @@ fun LiveControlScreen(
                 onFullscreen = { fullscreen = true },
             )
 
-            // —— Tabs: Controls | Recordings | Saved ——
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -845,6 +835,12 @@ private fun CompactPresets(
 ) {
     val haptics = LocalHapticFeedback.current
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Tap go · hold save",
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
         listOf(1 to 2, 3 to 4).forEach { (a, b) ->
             Row(
                 Modifier.fillMaxWidth(),
@@ -911,12 +907,6 @@ private fun CompactPresets(
                 Text("Send to screen", fontSize = 12.sp)
             }
         }
-        Text(
-            "Tap go · hold save",
-            fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
     }
 }
 
