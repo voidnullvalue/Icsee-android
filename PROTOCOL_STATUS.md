@@ -1,6 +1,6 @@
 # DVRIP Protocol Implementation Status
 
-This document tracks which protocol features have been live-confirmed against a real camera (192.168.88.129:34567 on 2026-07-03) and which are inferred from decompiled vendor source.
+This document tracks which protocol features have been live-confirmed against real hardware and which are inferred from decompiled vendor source. The original DVRIP work was confirmed against 192.168.88.129:34567 beginning 2026-07-03; AVTalk was additionally confirmed on AVTalk-capable hardware by `@jericjan` in August 2026.
 
 ## Generic Config Get/Set (DvripConfigChannel)
 
@@ -83,6 +83,28 @@ This document tracks which protocol features have been live-confirmed against a 
   correct scene + OSD timestamp). Sensor is 2304×2592 (stacked dual-view).
   In-app: `video/RecordedClipExporter` downloads + remuxes to MP4 (MediaMuxer)
   for ExoPlayer. Repro tooling: `tools/live/sdcard_probe.py`, `sdcard_download.py`.
+
+## AVTalk phone-to-camera broadcasting — VERIFIED
+
+AVTalk is **live-confirmed working on compatible hardware**. Unlike normal live view, which receives video from the camera, AVTalk sends the Android device's own camera and microphone to an iCSee/Xiongmai camera with a built-in display and speaker.
+
+The working Android implementation is based on the protocol flow reverse-engineered by `@jericjan` and the working `main.py` reference attached to issue #6:
+
+- plaintext MD5 `DVRIP-Web` login on the control socket;
+- three TCP sockets sharing the login `SessionID`: control, OPMonitor, and AVTalk media;
+- OPMonitor 1413 Claim+Start before AVTalk;
+- `DecoderPram` 1360 capability query is best-effort rather than required;
+- plaintext NUL-terminated 1417 AVTalk Claim and 1415 Start/Stop;
+- fixed sequence 24 for 1413/1417 claims;
+- sequence 0 for 1419 media packets;
+- 2-second 1006 KeepAlive;
+- H.265/HEVC video carried in AVTalk `0xFC` keyframe / `0xFD` inter-frame wrappers;
+- G.711 A-law audio in `0xFA` wrappers, 320-byte chunks at 8 kHz;
+- no encrypted 1360/1415 path and no 64 KiB media fragmentation.
+
+Hardware testing confirmed the media delivered to the camera is correctly oriented. The Android client preview was initially 90 degrees clockwise even though transmitted video was correct; the final fix keeps sensor-relative rotation in the `ImageReader`/HEVC path and applies only display rotation to the `TextureView` preview.
+
+See [`AVTALK.md`](AVTALK.md) for the focused protocol/implementation notes. Credit for the AVTalk reverse-engineering, working reference implementation, hardware testing, and preview-orientation bug report goes to **@jericjan**.
 
 ## Key Design Patterns
 - **Race-safe request/response**: Subscribe to DvripTransport.incomingFrames BEFORE sending (matches DvripLoginNegotiator)
