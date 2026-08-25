@@ -41,10 +41,12 @@ import java.io.File
 import java.lang.ref.WeakReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
@@ -171,6 +173,7 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     private var recordOutFile: File? = null
     private var recordTicker: Job? = null
     private var playerViewRef: WeakReference<PlayerView>? = null
+    private var listThumbJob: Job? = null
 
     @UnstableApi
     val muted: StateFlow<Boolean> = rtspPlayer.muted
@@ -179,7 +182,20 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     val bitrateBps: StateFlow<Long> = rtspPlayer.bitrateBps
 
     fun bindPlayerView(view: PlayerView?) {
-        playerViewRef = view?.let { WeakReference(it) }
+        if (view == null) {
+            // Composition disposing — grab a list thumb while the frame is still on the surface.
+            val stillBound = playerViewRef?.get()
+            val cameraId = held?.id ?: _camera.value?.id
+            if (stillBound != null && cameraId != null) {
+                captureListThumbBlocking(cameraId, stillBound)
+            }
+            stopListThumbUpdates()
+            playerViewRef = null
+            return
+        }
+        playerViewRef = WeakReference(view)
+        val cameraId = held?.id ?: _camera.value?.id
+        if (cameraId != null) startListThumbUpdates(cameraId)
     }
 
     fun clearStatusToast() {
@@ -431,6 +447,8 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     companion object {
+        private const val LIST_THUMB_INTERVAL_MS = 4_000L
+
         /**
          * Dance easter-egg media: the Funkytown video on the Internet Archive, a
          * plain DRM-free MP4 (H.264 + AAC). The on-screen ExoPlayer streams it
@@ -551,6 +569,9 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     @UnstableApi
     private fun releaseSession() {
         val camera = held ?: return
+        stopListThumbUpdates()
+        // Last live frame → Devices-list thumbnail, before RTSP/surface teardown.
+        captureListThumbBlocking(camera.id, playerViewRef?.get())
         held = null
         sessionStateJob?.cancel()
         sessionStateJob = null
@@ -567,6 +588,80 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         rtspPlayer.stop()
         sessionManager = null
         registry.release(camera.host, camera.dvripPort)
+    }
+
+    private fun startListThumbUpdates(cameraId: String) {
+        if (listThumbJob?.isActive == true) return
+        listThumbJob = viewModelScope.launch {
+            delay(1_500)
+            while (isActive) {
+                val view = playerViewRef?.get()
+                val id = held?.id ?: _camera.value?.id ?: cameraId
+                if (view != null) {
+                    withContext(Dispatchers.Main.immediate) {
+                        captureListThumbBlocking(id, view)
+                    }
+                }
+                delay(LIST_THUMB_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun stopListThumbUpdates() {
+        listThumbJob?.cancel()
+        listThumbJob = null
+    }
+
+    /**
+     * Writes the current PlayerView frame into [CameraThumbStore] for [cameraId].
+     * Best-effort so it can finish before the stream is abandoned.
+     */
+    private fun captureListThumbBlocking(cameraId: String, view: PlayerView?) {
+        if (view == null) return
+        runCatching {
+            val bmp = grabPlayerBitmap(view) ?: return
+            try {
+                cameraThumbs.saveJpeg(cameraId, bmp)
+            } finally {
+                bmp.recycle()
+            }
+        }
+    }
+
+    private fun grabPlayerBitmap(view: PlayerView): android.graphics.Bitmap? {
+        findTextureView(view)?.bitmap?.takeUnless { it.isRecycled }?.let { return it }
+        val surface = findSurfaceView(view) ?: return null
+        if (surface.width <= 0 || surface.height <= 0) return null
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            surface.width,
+            surface.height,
+            android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        val thread = android.os.HandlerThread("list-thumb").also { it.start() }
+        return try {
+            val handler = android.os.Handler(thread.looper)
+            val done = java.util.concurrent.CountDownLatch(1)
+            var success = false
+            android.view.PixelCopy.request(
+                surface,
+                bitmap,
+                { result ->
+                    success = result == android.view.PixelCopy.SUCCESS
+                    done.countDown()
+                },
+                handler,
+            )
+            done.await(750, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (success) bitmap else {
+                bitmap.recycle()
+                null
+            }
+        } catch (_: Exception) {
+            bitmap.recycle()
+            null
+        } finally {
+            thread.quitSafely()
+        }
     }
 
     private fun wireControllers(found: CameraDescriptor, state: ConnectionState.Authenticated) {
@@ -644,7 +739,6 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
             val path = capturePresetThumb(view, cameraId, preset)
             if (path != null) {
                 presetThumbs.put(cameraId, preset, path)
-                withContext(Dispatchers.IO) { cameraThumbs.copyFrom(cameraId, File(path)) }
                 _presetThumbPaths.value = _presetThumbPaths.value + (preset to path)
                 _presetThumbEpoch.value = System.currentTimeMillis()
                 _statusToast.value = "Favourite saved"

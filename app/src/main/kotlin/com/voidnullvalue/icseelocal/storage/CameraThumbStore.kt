@@ -6,11 +6,13 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import java.io.File
 import java.io.FileOutputStream
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Last-seen JPEG for a saved camera, shown as the Devices-list thumbnail.
- * Written when the user takes a live snapshot, saves a PTZ preset, or opens
- * a camera that already has a gallery screenshot.
+ * Written from the live player (periodically + on leave), snapshots, and presets.
  */
 class CameraThumbStore(private val context: Context) {
     fun fileFor(cameraId: String): File {
@@ -24,10 +26,14 @@ class CameraThumbStore(private val context: Context) {
 
     fun saveJpeg(cameraId: String, bitmap: Bitmap) {
         val scaled = scaleToMax(bitmap, MAX_EDGE_PX)
+        val outFile = fileFor(cameraId)
         try {
-            FileOutputStream(fileFor(cameraId)).use { out ->
+            FileOutputStream(outFile).use { out ->
                 scaled.compress(Bitmap.CompressFormat.JPEG, 75, out)
             }
+            // Filesystems may keep the same mtime second; force a change the list can see.
+            outFile.setLastModified(System.currentTimeMillis())
+            bumpGeneration()
         } finally {
             if (scaled !== bitmap) scaled.recycle()
         }
@@ -62,5 +68,13 @@ class CameraThumbStore(private val context: Context) {
 
     companion object {
         private const val MAX_EDGE_PX = 240
+
+        private val _generation = MutableStateFlow(0L)
+        /** Bumps whenever any process writes a camera thumb — list screens collect this. */
+        val generation: StateFlow<Long> = _generation.asStateFlow()
+
+        fun bumpGeneration() {
+            _generation.value = System.currentTimeMillis()
+        }
     }
 }

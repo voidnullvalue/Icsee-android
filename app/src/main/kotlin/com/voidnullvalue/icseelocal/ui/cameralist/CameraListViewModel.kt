@@ -1,7 +1,6 @@
 package com.voidnullvalue.icseelocal.ui.cameralist
 
 import android.app.Application
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.voidnullvalue.icseelocal.discovery.AndroidMulticastLockController
@@ -10,9 +9,6 @@ import com.voidnullvalue.icseelocal.discovery.DiscoveryBeacon
 import com.voidnullvalue.icseelocal.model.CameraDescriptor
 import com.voidnullvalue.icseelocal.storage.CameraStore
 import com.voidnullvalue.icseelocal.storage.CameraThumbStore
-import com.voidnullvalue.icseelocal.storage.LocalMediaLibrary
-import com.voidnullvalue.icseelocal.storage.PresetThumbStore
-import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,12 +22,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+
+/** List-row thumbnail; [generation] forces UI reload when the same path is overwritten. */
+data class CameraListThumb(
+    val path: String,
+    val modifiedMs: Long,
+    val generation: Long,
+)
 
 class CameraListViewModel(application: Application) : AndroidViewModel(application) {
     private val store = CameraStore(application)
     private val cameraThumbs = CameraThumbStore(application)
-    private val presetThumbs = PresetThumbStore(application)
     private val discoveryClient = CameraDiscoveryClient(multicastLock = AndroidMulticastLockController(application))
 
     val savedCameras: StateFlow<List<CameraDescriptor>> = store.cameras
@@ -54,8 +55,8 @@ class CameraListViewModel(application: Application) : AndroidViewModel(applicati
     private val _onlineCameras = MutableStateFlow<Set<String>>(emptySet())
     val onlineCameras: StateFlow<Set<String>> = _onlineCameras.asStateFlow()
 
-    private val _previewPaths = MutableStateFlow<Map<String, String>>(emptyMap())
-    val previewPaths: StateFlow<Map<String, String>> = _previewPaths.asStateFlow()
+    private val _previewThumbs = MutableStateFlow<Map<String, CameraListThumb>>(emptyMap())
+    val previewThumbs: StateFlow<Map<String, CameraListThumb>> = _previewThumbs.asStateFlow()
 
     private var onlineProbeJob: Job? = null
 
@@ -70,6 +71,12 @@ class CameraListViewModel(application: Application) : AndroidViewModel(applicati
                 val placeholder = !seenRealList && cameras.isEmpty()
                 seenRealList = true
                 if (!placeholder) startOnlineProbe(cameras)
+            }
+        }
+        // LiveControl writes thumbs on leave / while streaming — refresh list rows.
+        viewModelScope.launch {
+            CameraThumbStore.generation.collect {
+                refreshPreviews(savedCameras.value)
             }
         }
     }
@@ -119,43 +126,19 @@ class CameraListViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private suspend fun refreshPreviews(cameras: List<CameraDescriptor>) {
-        val presets = presetThumbs.all()
-        _previewPaths.value = buildMap {
+        _previewThumbs.value = buildMap {
             cameras.forEach { cam ->
-                val dedicated = cameraThumbs.pathIfExists(cam.id)
-                val fromPreset = presets
-                    .filter { it.cameraId == cam.id && File(it.thumbPath).exists() }
-                    .maxByOrNull { it.savedAtMs }
-                    ?.thumbPath
-                val path = dedicated ?: fromPreset
-                if (path != null) put(cam.id, path)
+                val file = cameraThumbs.fileFor(cam.id).takeIf { it.exists() && it.length() > 0L }
+                    ?: return@forEach
+                put(
+                    cam.id,
+                    CameraListThumb(
+                        path = file.absolutePath,
+                        modifiedMs = file.lastModified(),
+                        generation = CameraThumbStore.generation.value,
+                    ),
+                )
             }
-        }
-    }
-
-    fun checkOnlineStatus() {
-        val cameras = savedCameras.value
-        if (cameras.isEmpty()) return
-        startOnlineProbe(cameras)
-    }
-
-    /**
-     * Pulls the newest gallery snapshot for [camera] into [CameraThumbStore]
-     * so the list row can show it as the thumbnail, then refreshes preview paths.
-     */
-    fun applyLastScreenshotThumb(camera: CameraDescriptor) {
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                val latest = LocalMediaLibrary.latestImageForCamera(getApplication(), camera.displayName)
-                    ?: return@withContext
-                val uri = Uri.parse(latest.uri)
-                if (uri.scheme == "file") {
-                    uri.path?.let { cameraThumbs.copyFrom(camera.id, File(it)) }
-                } else {
-                    cameraThumbs.copyFromUri(camera.id, uri)
-                }
-            }
-            refreshPreviews(savedCameras.value)
         }
     }
 
@@ -164,6 +147,12 @@ class CameraListViewModel(application: Application) : AndroidViewModel(applicati
         onlineProbeJob = viewModelScope.launch {
             _onlineCameras.value = probeReachable(cameras)
         }
+    }
+
+    fun checkOnlineStatus() {
+        val cameras = savedCameras.value
+        if (cameras.isEmpty()) return
+        startOnlineProbe(cameras)
     }
 
     private suspend fun probeReachable(cameras: List<CameraDescriptor>): Set<String> {

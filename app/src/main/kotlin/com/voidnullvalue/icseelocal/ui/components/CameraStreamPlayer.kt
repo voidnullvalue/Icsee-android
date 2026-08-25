@@ -266,24 +266,28 @@ private fun PlayerSurface(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            playerView?.player = null
+            // Capture list thumb while the player is still attached — clearing
+            // player first leaves TextureView/SurfaceView with nothing to copy.
             onBindPlayerView?.invoke(null)
+            playerView?.player = null
         }
     }
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
-            PlayerView(ctx).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                )
-                player = exoPlayer
-                useController = false
-                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                playerView = this
-                onBindPlayerView?.invoke(this)
-            }
+            (android.view.LayoutInflater.from(ctx)
+                .inflate(com.voidnullvalue.icseelocal.R.layout.player_view_texture, null, false) as PlayerView)
+                .apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    player = exoPlayer
+                    useController = false
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    playerView = this
+                    onBindPlayerView?.invoke(this)
+                }
         },
         update = { v ->
             if (v.player !== exoPlayer) v.player = exoPlayer

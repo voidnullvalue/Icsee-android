@@ -77,7 +77,7 @@ fun CameraListScreen(
     val discovered by viewModel.discovered.collectAsState()
     val discovering by viewModel.discovering.collectAsState()
     val onlineIds by viewModel.onlineCameras.collectAsState()
-    val previewPaths by viewModel.previewPaths.collectAsState()
+    val previewThumbs by viewModel.previewThumbs.collectAsState()
     var subnet by remember { mutableStateOf(viewModel.suggestedSubnet()) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -171,11 +171,8 @@ fun CameraListScreen(
                 SavedCameraCard(
                     camera = camera,
                     online = camera.id in onlineIds,
-                    previewPath = previewPaths[camera.id],
-                    onClick = {
-                        viewModel.applyLastScreenshotThumb(camera)
-                        onOpenCamera(camera.id)
-                    },
+                    preview = previewThumbs[camera.id],
+                    onClick = { onOpenCamera(camera.id) },
                     onSettings = { onOpenSettings(camera.id) },
                 )
             }
@@ -202,7 +199,7 @@ fun CameraListScreen(
 private fun SavedCameraCard(
     camera: CameraDescriptor,
     online: Boolean,
-    previewPath: String?,
+    preview: CameraListThumb?,
     onClick: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -213,7 +210,7 @@ private fun SavedCameraCard(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
         Row(Modifier.clickable(onClick = onClick).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            CameraPreviewThumb(previewPath = previewPath, online = online)
+            CameraPreviewThumb(preview = preview, online = online)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Row(
@@ -247,12 +244,12 @@ private fun SavedCameraCard(
 }
 
 @Composable
-private fun CameraPreviewThumb(previewPath: String?, online: Boolean) {
+private fun CameraPreviewThumb(preview: CameraListThumb?, online: Boolean) {
     val status = MaterialTheme.statusColors
-    val bmp = remember(previewPath) {
-        previewPath?.let { path ->
-            val f = File(path)
-            if (f.exists()) BitmapFactory.decodeFile(path)?.asImageBitmap() else null
+    val bmp = remember(preview?.path, preview?.modifiedMs, preview?.generation) {
+        preview?.let { thumb ->
+            val f = File(thumb.path)
+            if (f.exists()) BitmapFactory.decodeFile(thumb.path)?.asImageBitmap() else null
         }
     }
     Box(Modifier.size(56.dp)) {

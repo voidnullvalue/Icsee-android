@@ -23,9 +23,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -750,16 +752,34 @@ private fun ControlsPanel(
             talkError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
 
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.Top,
             ) {
                 Column(
-                    Modifier.weight(1f, fill = false),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    CompactPtzPad(onPtzDown, onPtzUp, onPtzCancel)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "Pan · tilt · zoom",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        CompactPtzPad(
+                            onPtzDown,
+                            onPtzUp,
+                            onPtzCancel,
+                            Modifier.fillMaxWidth(),
+                        )
+                    }
                     HoldToTalkButton(
                         talking = talking,
                         hasMicPermission = hasMicPermission,
@@ -773,7 +793,9 @@ private fun ControlsPanel(
                     onGoto = onGotoPreset,
                     onSave = onSavePreset,
                     onOpenAvTalk = onOpenAvTalk,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
                 )
             }
 
@@ -841,17 +863,17 @@ private fun CompactPtzPad(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             PtzPadButton(Icons.Default.NorthWest, "Up-left", { onDown(PtzCommand.DIRECTION_LEFT_UP) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.North, "Up", { onDown(PtzCommand.DIRECTION_UP) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.NorthEast, "Up-right", { onDown(PtzCommand.DIRECTION_RIGHT_UP) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             PtzPadButton(Icons.Default.West, "Left", { onDown(PtzCommand.DIRECTION_LEFT) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.Stop, "Stop", onUp, onUp, onUp, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.East, "Right", { onDown(PtzCommand.DIRECTION_RIGHT) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             PtzPadButton(Icons.Default.SouthWest, "Down-left", { onDown(PtzCommand.DIRECTION_LEFT_DOWN) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.South, "Down", { onDown(PtzCommand.DIRECTION_DOWN) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.SouthEast, "Down-right", { onDown(PtzCommand.DIRECTION_RIGHT_DOWN) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
@@ -870,65 +892,70 @@ private fun CompactPresets(
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            "Tap go · hold save",
-            fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
-        listOf(1 to 2, 3 to 4).forEach { (a, b) ->
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                listOf(a, b).forEach { n ->
-                    val path = thumbs[n]
-                    val bmp = remember(path, thumbEpoch) {
-                        path?.let { p ->
-                            val f = File(p)
-                            if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Tap go · hold save",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+            listOf(1 to 2, 3 to 4).forEach { (a, b) ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(a, b).forEach { n ->
+                        val path = thumbs[n]
+                        val bmp = remember(path, thumbEpoch) {
+                            path?.let { p ->
+                                val f = File(p)
+                                if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
+                            }
                         }
-                    }
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF1A1F26))
-                            .combinedClickable(
-                                onClick = { onGoto(n) },
-                                onLongClick = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onSave(n)
-                                },
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (bmp != null) {
-                            Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                        } else {
-                            Image(
-                                painter = androidx.compose.ui.res.painterResource(
-                                    id = com.voidnullvalue.icseelocal.R.drawable.ic_preset_placeholder,
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF1A1F26))
+                                .combinedClickable(
+                                    onClick = { onGoto(n) },
+                                    onLongClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onSave(n)
+                                    },
                                 ),
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop,
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (bmp != null) {
+                                Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            } else {
+                                Image(
+                                    painter = androidx.compose.ui.res.painterResource(
+                                        id = com.voidnullvalue.icseelocal.R.drawable.ic_preset_placeholder,
+                                    ),
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop,
+                                )
+                            }
+                            Text(
+                                "$n",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .padding(6.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0x99000000))
+                                    .padding(horizontal = 4.dp, vertical = 1.dp),
                             )
                         }
-                        Text(
-                            "$n",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(6.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(Color(0x99000000))
-                                .padding(horizontal = 4.dp, vertical = 1.dp),
-                        )
                     }
                 }
             }
