@@ -165,6 +165,13 @@ class CameraDiscoveryClient(
         found.values.sortedBy { it.hostIp }
     }
 
+    /**
+     * Non-authenticating reachability check for a saved camera (same DVRIP
+     * negotiate probe as the subnet sweep). Safe to call periodically from
+     * the camera list — costs no logins.
+     */
+    fun isReachable(host: String, port: Int): Boolean = isDvripHost(host, port)
+
     /** True only if [ip]:[port] answers the non-authenticating negotiate probe with a valid DVRIP frame (0xFF magic, msg 1011). */
     private fun isDvripHost(ip: String, port: Int): Boolean = runCatching {
         Socket().use { s ->

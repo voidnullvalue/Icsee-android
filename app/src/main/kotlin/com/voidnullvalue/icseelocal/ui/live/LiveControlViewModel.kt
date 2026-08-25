@@ -26,6 +26,7 @@ import com.voidnullvalue.icseelocal.ptz.PtzController
 import com.voidnullvalue.icseelocal.session.CameraCredentials
 import com.voidnullvalue.icseelocal.session.CameraSessionManager
 import com.voidnullvalue.icseelocal.storage.CameraStore
+import com.voidnullvalue.icseelocal.storage.CameraThumbStore
 import com.voidnullvalue.icseelocal.storage.PresetThumbStore
 import com.voidnullvalue.icseelocal.video.LiveStreamRecorder
 import com.voidnullvalue.icseelocal.video.RecordedVideoStore
@@ -56,6 +57,7 @@ import kotlinx.serialization.json.put
 class LiveControlViewModel(application: Application) : AndroidViewModel(application), DefaultLifecycleObserver {
     private val store = CameraStore(application)
     private val presetThumbs = PresetThumbStore(application)
+    private val cameraThumbs = CameraThumbStore(application)
     private val microphone = MicrophoneSource(application)
     // The app-wide session owner. This ViewModel no longer creates or shuts down
     // CameraSessionManagers -- it acquires the shared one for the camera it's showing
@@ -284,18 +286,22 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
         val name = _camera.value?.displayName ?: "camera"
+        val cameraId = _camera.value?.id
         viewModelScope.launch {
             val capture = SnapshotCapture(getApplication())
             val surface = findSurfaceView(view)
+            val rememberThumb: (android.graphics.Bitmap) -> Unit = { bmp ->
+                if (cameraId != null) cameraThumbs.saveJpeg(cameraId, bmp)
+            }
             val result = if (surface != null) {
-                capture.captureFromSurfaceView(surface, name)
+                capture.captureFromSurfaceView(surface, name, onFrame = rememberThumb)
             } else {
                 // TextureView path: grab bitmap directly
                 val texture = findTextureView(view)
                 val bmp = texture?.bitmap
                 if (bmp == null) SnapshotResult.Failure("no frame")
                 else {
-                    // Reuse SnapshotCapture's gallery save via a temp surface path — save manually
+                    rememberThumb(bmp)
                     saveBitmapSnapshot(bmp, name).also { bmp.recycle() }
                 }
             }
@@ -638,6 +644,7 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
             val path = capturePresetThumb(view, cameraId, preset)
             if (path != null) {
                 presetThumbs.put(cameraId, preset, path)
+                withContext(Dispatchers.IO) { cameraThumbs.copyFrom(cameraId, File(path)) }
                 _presetThumbPaths.value = _presetThumbPaths.value + (preset to path)
                 _presetThumbEpoch.value = System.currentTimeMillis()
                 _statusToast.value = "Favourite saved"

@@ -1,7 +1,12 @@
 package com.voidnullvalue.icseelocal.ui.cameralist
 
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -20,7 +26,6 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -30,6 +35,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,8 +43,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.voidnullvalue.icseelocal.discovery.DiscoveryBeacon
 import com.voidnullvalue.icseelocal.model.CameraDescriptor
@@ -46,6 +59,9 @@ import com.voidnullvalue.icseelocal.ui.components.AppScaffold
 import com.voidnullvalue.icseelocal.ui.components.GradientButton
 import com.voidnullvalue.icseelocal.ui.components.IconBadge
 import com.voidnullvalue.icseelocal.ui.components.SectionCard
+import com.voidnullvalue.icseelocal.ui.theme.statusColors
+import java.io.File
+import kotlinx.coroutines.delay
 
 @Composable
 fun CameraListScreen(
@@ -60,7 +76,20 @@ fun CameraListScreen(
     val saved by viewModel.savedCameras.collectAsState()
     val discovered by viewModel.discovered.collectAsState()
     val discovering by viewModel.discovering.collectAsState()
+    val onlineIds by viewModel.onlineCameras.collectAsState()
+    val previewPaths by viewModel.previewPaths.collectAsState()
     var subnet by remember { mutableStateOf(viewModel.suggestedSubnet()) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.refreshPreviews()
+            while (true) {
+                viewModel.checkOnlineStatus()
+                delay(ONLINE_REFRESH_INTERVAL_MS)
+            }
+        }
+    }
 
     AppScaffold(
         title = "iCSee Local Control",
@@ -139,7 +168,16 @@ fun CameraListScreen(
                 }
             }
             items(saved, key = { it.id }) { camera ->
-                SavedCameraCard(camera, onClick = { onOpenCamera(camera.id) }, onSettings = { onOpenSettings(camera.id) })
+                SavedCameraCard(
+                    camera = camera,
+                    online = camera.id in onlineIds,
+                    previewPath = previewPaths[camera.id],
+                    onClick = {
+                        viewModel.applyLastScreenshotThumb(camera)
+                        onOpenCamera(camera.id)
+                    },
+                    onSettings = { onOpenSettings(camera.id) },
+                )
             }
 
             if (discovered.isNotEmpty()) {
@@ -161,17 +199,41 @@ fun CameraListScreen(
 }
 
 @Composable
-private fun SavedCameraCard(camera: CameraDescriptor, onClick: () -> Unit, onSettings: () -> Unit) {
+private fun SavedCameraCard(
+    camera: CameraDescriptor,
+    online: Boolean,
+    previewPath: String?,
+    onClick: () -> Unit,
+    onSettings: () -> Unit,
+) {
+    val status = MaterialTheme.statusColors
     Surface(
         Modifier.fillMaxWidth().padding(vertical = 4.dp),
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
         Row(Modifier.clickable(onClick = onClick).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconBadge(Icons.Default.Videocam)
+            CameraPreviewThumb(previewPath = previewPath, online = online)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(camera.displayName, style = MaterialTheme.typography.titleMedium)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(camera.displayName, style = MaterialTheme.typography.titleMedium)
+                    if (online) {
+                        Text(
+                            "Online",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = status.ok,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(status.ok.copy(alpha = 0.12f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
                 Text("${camera.host}:${camera.dvripPort}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 camera.firmwareVersion?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -181,6 +243,46 @@ private fun SavedCameraCard(camera: CameraDescriptor, onClick: () -> Unit, onSet
                 Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+    }
+}
+
+@Composable
+private fun CameraPreviewThumb(previewPath: String?, online: Boolean) {
+    val status = MaterialTheme.statusColors
+    val bmp = remember(previewPath) {
+        previewPath?.let { path ->
+            val f = File(path)
+            if (f.exists()) BitmapFactory.decodeFile(path)?.asImageBitmap() else null
+        }
+    }
+    Box(Modifier.size(56.dp)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (bmp != null) {
+                Image(bmp, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            } else {
+                Icon(
+                    Icons.Default.Videocam,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(3.dp)
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(if (online) status.ok else status.offline)
+                .border(1.5.dp, MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape),
+        )
     }
 }
 
@@ -202,3 +304,5 @@ private fun DiscoveredCameraCard(beacon: DiscoveryBeacon, onAdd: () -> Unit) {
         }
     }
 }
+
+private const val ONLINE_REFRESH_INTERVAL_MS = 20_000L
