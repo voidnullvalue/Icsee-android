@@ -140,21 +140,43 @@ fun PlaybackBrowserScreen(
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(top = 12.dp, bottom = 6.dp),
             )
+            var exportExpanded by remember { mutableStateOf(false) }
+            val busy = state.downloadingClip != null || state.playBuffering
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                dayKeys.forEach { day ->
-                    val count = all.count { it.dayKey == day }
-                    DayChip(
-                        day = day,
-                        count = count,
-                        selected = day == selectedDay,
-                        onClick = { viewModel.selectRecordingDay(day) },
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    dayKeys.forEach { day ->
+                        val count = all.count { it.dayKey == day }
+                        DayChip(
+                            day = day,
+                            count = count,
+                            selected = day == selectedDay,
+                            onClick = { viewModel.selectRecordingDay(day) },
+                        )
+                    }
+                }
+                if (selectedDay != null) {
+                    TimeRangeExportToggle(
+                        expanded = exportExpanded,
+                        onToggle = { exportExpanded = !exportExpanded },
                     )
                 }
+            }
+            if (exportExpanded && selectedDay != null) {
+                TimeRangeExportPanel(
+                    selectedDay = selectedDay,
+                    busy = busy,
+                    onPlay = viewModel::playTimeRange,
+                    onDownload = viewModel::downloadTimeRange,
+                )
             }
 
             Text(
