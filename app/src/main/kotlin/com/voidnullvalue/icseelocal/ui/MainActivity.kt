@@ -185,7 +185,6 @@ class MainActivity : ComponentActivity() {
                         onBack = { nav.pop() },
                     )
                 }
-                }
             }
         }
     }
