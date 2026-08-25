@@ -157,7 +157,7 @@ private val IcseeTypography = Typography(
 /** Stream / connection status colors beyond the Material color scheme. */
 @Immutable
 data class StatusColorTokens(
-    val live: Color = Color(0xFFFF3B4A),
+    val live: Color = Color(0xFF34D399),
     val ok: Color = Color(0xFF34D399),
     val buffering: Color = Color(0xFF8FD3FF),
     val reconnecting: Color = Color(0xFFFFB77C),

@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -458,13 +457,11 @@ fun LiveControlScreen(
         }
 
         if (!fullscreen) {
-            // —— Action row directly under stream (zoom / talk live here) ——
+            // —— Action row directly under stream ——
             StreamActionRow(
                 mainStream = mainStream,
                 muted = muted,
                 recording = recording,
-                talking = talking,
-                hasMicPermission = hasMicPermission,
                 canResetZoom = scale > 1.01f,
                 onToggleQuality = {
                     viewModel.setStreamType(
@@ -474,11 +471,6 @@ fun LiveControlScreen(
                 onToggleMute = viewModel::toggleMute,
                 onSnapshot = viewModel::takeSnapshot,
                 onToggleRecording = viewModel::toggleRecording,
-                onTalkPress = {
-                    if (!hasMicPermission) micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    else viewModel.startTalk()
-                },
-                onTalkRelease = viewModel::stopTalk,
                 onZoomIn = { bumpZoom(1.25f) },
                 onZoomOut = { bumpZoom(0.8f) },
                 onResetZoom = { resetZoom() },
@@ -516,6 +508,8 @@ fun LiveControlScreen(
                     LiveBottomTab.Controls -> ControlsPanel(
                         state = state,
                         talkError = talkError,
+                        talking = talking,
+                        hasMicPermission = hasMicPermission,
                         speed = speed,
                         cruiseActive = cruiseActive,
                         lightOn = lightOn,
@@ -530,6 +524,11 @@ fun LiveControlScreen(
                         onGotoPreset = viewModel::gotoPreset,
                         onSavePreset = viewModel::setPreset,
                         onOpenAvTalk = onOpenAvTalk,
+                        onTalkPress = {
+                            if (!hasMicPermission) micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            else viewModel.startTalk()
+                        },
+                        onTalkRelease = viewModel::stopTalk,
                         onSpeed = viewModel::setSpeedStep,
                         onToggleCruise = viewModel::toggleCruise,
                         onToggleLight = viewModel::toggleLight,
@@ -604,15 +603,11 @@ private fun StreamActionRow(
     mainStream: Boolean,
     muted: Boolean,
     recording: Boolean,
-    talking: Boolean,
-    hasMicPermission: Boolean,
     canResetZoom: Boolean,
     onToggleQuality: () -> Unit,
     onToggleMute: () -> Unit,
     onSnapshot: () -> Unit,
     onToggleRecording: () -> Unit,
-    onTalkPress: () -> Unit,
-    onTalkRelease: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onResetZoom: () -> Unit,
@@ -645,32 +640,42 @@ private fun StreamActionRow(
             ActionIcon(Icons.Default.RestartAlt, onResetZoom)
         }
         ActionIcon(Icons.Default.Fullscreen, onFullscreen)
-        val talkBg by animateColorAsState(
-            if (talking) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
-            label = "talk",
-        )
-        Row(
-            Modifier
-                .widthIn(min = 120.dp)
-                .height(40.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(talkBg)
-                .pointerInput(hasMicPermission) {
-                    awaitEachGesture {
-                        awaitFirstDown()
-                        onTalkPress()
-                        waitForUpOrCancellation()
-                        onTalkRelease()
-                    }
+    }
+}
+
+@Composable
+private fun HoldToTalkButton(
+    talking: Boolean,
+    hasMicPermission: Boolean,
+    onTalkPress: () -> Unit,
+    onTalkRelease: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val talkBg by animateColorAsState(
+        if (talking) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
+        label = "talk",
+    )
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(talkBg)
+            .pointerInput(hasMicPermission) {
+                awaitEachGesture {
+                    awaitFirstDown()
+                    onTalkPress()
+                    waitForUpOrCancellation()
+                    onTalkRelease()
                 }
-                .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Default.Mic, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(if (talking) "Talking…" else "Hold to talk", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-        }
+            }
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.Mic, null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(if (talking) "Talking…" else "Hold to talk", fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -679,6 +684,8 @@ private fun StreamActionRow(
 private fun ControlsPanel(
     state: ConnectionState,
     talkError: String?,
+    talking: Boolean,
+    hasMicPermission: Boolean,
     speed: Int,
     cruiseActive: Boolean,
     lightOn: Boolean,
@@ -693,6 +700,8 @@ private fun ControlsPanel(
     onGotoPreset: (Int) -> Unit,
     onSavePreset: (Int) -> Unit,
     onOpenAvTalk: (() -> Unit)?,
+    onTalkPress: () -> Unit,
+    onTalkRelease: () -> Unit,
     onSpeed: (Int) -> Unit,
     onToggleCruise: () -> Unit,
     onToggleLight: () -> Unit,
@@ -743,9 +752,21 @@ private fun ControlsPanel(
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
             ) {
-                CompactPtzPad(onPtzDown, onPtzUp, onPtzCancel, Modifier.weight(1f, fill = false))
+                Column(
+                    Modifier.weight(1f, fill = false),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CompactPtzPad(onPtzDown, onPtzUp, onPtzCancel)
+                    HoldToTalkButton(
+                        talking = talking,
+                        hasMicPermission = hasMicPermission,
+                        onTalkPress = onTalkPress,
+                        onTalkRelease = onTalkRelease,
+                    )
+                }
                 CompactPresets(
                     thumbs = presetThumbs,
                     thumbEpoch = presetThumbEpoch,
