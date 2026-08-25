@@ -42,6 +42,7 @@ fun RecordingDayTimeline(
     day: String,
     clips: List<RecordedFile>,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
     onClipClick: (RecordedFile) -> Unit = {},
 ) {
     val dayStart = remember(day) {
@@ -50,14 +51,18 @@ fun RecordingDayTimeline(
     Column(modifier) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             (0..23 step 6).forEach { h ->
-                Text("%02d".format(h), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "%02d".format(h),
+                    fontSize = if (compact) 9.sp else 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(if (compact) 2.dp else 4.dp))
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(28.dp)
+                .height(if (compact) 18.dp else 28.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .background(GapColor),
         ) {
@@ -71,13 +76,15 @@ fun RecordingDayTimeline(
                 }
             }
         }
-        Row(
-            Modifier.fillMaxWidth().padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            LegendDot(GapColor, "No recording")
-            LegendDot(ContinuousBlue, "Continuous")
-            LegendDot(ActivityGreen, "Activity")
+        if (!compact) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                LegendDot(GapColor, "No recording")
+                LegendDot(ContinuousBlue, "Continuous")
+                LegendDot(ActivityGreen, "Activity")
+            }
         }
     }
 }

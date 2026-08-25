@@ -544,7 +544,6 @@ fun LiveControlScreen(
                         progress = dmState.downloadProgressBytes,
                         playBuffering = dmState.playBuffering,
                         error = dmState.errorMessage,
-                        onRefresh = deviceManagementViewModel::loadAllRecordings,
                         onSelectDay = deviceManagementViewModel::selectRecordingDay,
                         onPlay = deviceManagementViewModel::playClip,
                         onDownload = deviceManagementViewModel::downloadClip,
@@ -983,7 +982,6 @@ private fun LiveRecordingsPanel(
     progress: Long,
     playBuffering: Boolean,
     error: String?,
-    onRefresh: () -> Unit,
     onSelectDay: (String) -> Unit,
     onPlay: (RecordedFile) -> Unit,
     onDownload: (RecordedFile) -> Unit,
@@ -998,64 +996,89 @@ private fun LiveRecordingsPanel(
     }
     val busy = downloading != null || playBuffering
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Recordings", fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = onRefresh, enabled = !querying) {
-                Text(if (querying) "Loading…" else "Refresh", fontSize = 12.sp)
-            }
-        }
+    Column(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 4.dp)) {
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
 
-        TimeRangeExportCard(
-            selectedDay = day,
-            busy = busy,
-            onPlay = onPlayRange,
-            onDownload = onDownloadRange,
-        )
+        var exportExpanded by remember { mutableStateOf(false) }
 
-        if (dayKeys.isNotEmpty()) {
+        if (dayKeys.isNotEmpty() || day != null) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                dayKeys.forEach { key ->
-                    val count = all.count { it.dayKey == key }
-                    RecordingDayChip(
-                        label = recordingDayLabel(key),
-                        count = count,
-                        selected = key == day,
-                        onClick = { onSelectDay(key) },
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    dayKeys.forEach { key ->
+                        val count = all.count { it.dayKey == key }
+                        RecordingDayChip(
+                            label = recordingDayLabel(key),
+                            count = count,
+                            selected = key == day,
+                            onClick = { onSelectDay(key) },
+                        )
+                    }
+                }
+                if (day != null) {
+                    TimeRangeExportToggle(
+                        expanded = exportExpanded,
+                        onToggle = { exportExpanded = !exportExpanded },
                     )
                 }
             }
+        }
+
+        if (exportExpanded && day != null) {
+            TimeRangeExportPanel(
+                selectedDay = day,
+                busy = busy,
+                onPlay = onPlayRange,
+                onDownload = onDownloadRange,
+            )
         }
 
         if (day != null && dayClips.isNotEmpty()) {
             RecordingDayTimeline(
                 day = day,
                 clips = dayClips,
+                compact = true,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
+                    .padding(top = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
                 onClipClick = onPlay,
             )
-            Spacer(Modifier.height(8.dp))
         }
 
         when {
-            querying && clips == null -> CircularProgressIndicator(Modifier.padding(top = 16.dp).align(Alignment.CenterHorizontally))
+            querying && clips == null -> CircularProgressIndicator(
+                Modifier
+                    .padding(top = 12.dp)
+                    .size(28.dp)
+                    .align(Alignment.CenterHorizontally),
+                strokeWidth = 2.dp,
+            )
             dayClips.isEmpty() -> Text(
                 if (querying) "Loading…" else "No recordings for this day.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 12.dp),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 8.dp),
             )
-            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
+            else -> LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 4.dp),
+            ) {
                 items(dayClips, key = { it.fileName + it.beginTime }) { clip ->
                     LiveClipRow(
                         clip = clip,
@@ -1074,16 +1097,21 @@ private fun LiveRecordingsPanel(
 @Composable
 private fun RecordingDayChip(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
     val bg = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest
-    Column(
+    Row(
         Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(bg)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-        Text("$count", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            "$count",
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -1101,21 +1129,21 @@ private fun LiveClipRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .combinedClickable(enabled = !busy || downloading, onClick = onPlay),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             Modifier
-                .width(4.dp)
-                .height(60.dp)
+                .width(3.dp)
+                .height(40.dp)
                 .background(if (clip.hasActivity) activityGreen else Color(0xFF38BDF8).copy(alpha = 0.45f)),
         )
         Row(
             Modifier
                 .weight(1f)
-                .padding(8.dp),
+                .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val bmp = remember(clip.thumbPath) {
@@ -1126,8 +1154,8 @@ private fun LiveClipRow(
             }
             Box(
                 Modifier
-                    .size(72.dp, 44.dp)
-                    .clip(RoundedCornerShape(6.dp))
+                    .size(56.dp, 34.dp)
+                    .clip(RoundedCornerShape(5.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerHighest),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1137,40 +1165,40 @@ private fun LiveClipRow(
                     Icon(
                         if (clip.hasActivity) Icons.Default.Sensors else Icons.Default.Videocam,
                         null,
-                        Modifier.size(18.dp),
+                        Modifier.size(16.dp),
                         tint = if (clip.hasActivity) activityGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(clip.beginTime.substringAfter(' ', clip.beginTime), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(clip.beginTime.substringAfter(' ', clip.beginTime), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         clip.activityLabel,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = if (clip.hasActivity) activityGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text("·", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("·", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
                         when {
                             downloading -> "%.1f MB…".format(progress / 1e6)
                             clip.isDownloaded -> "On device"
                             else -> "On camera"
                         },
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
             if (!clip.isDownloaded) {
-                IconButton(onClick = onDownload, enabled = !busy || downloading) {
+                IconButton(onClick = onDownload, enabled = !busy || downloading, modifier = Modifier.size(32.dp)) {
                     if (downloading) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     } else {
-                        Icon(Icons.Default.CloudDownload, "Download", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.Default.CloudDownload, "Download", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -1411,82 +1439,91 @@ private fun FunkytownDanceDialog(onDismiss: () -> Unit, onStart: () -> Unit) {
 }
 
 @Composable
-private fun TimeRangeExportCard(
-    selectedDay: String?,
+private fun TimeRangeExportToggle(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (expanded) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceContainerHighest,
+            )
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text("Export", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Icon(
+            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = if (expanded) "Collapse export" else "Export by time range",
+            modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+@Composable
+private fun TimeRangeExportPanel(
+    selectedDay: String,
     busy: Boolean,
     onPlay: (date: String, startTime: String, endTime: String) -> Unit,
     onDownload: (date: String, startTime: String, endTime: String) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
     var startHour by remember { mutableIntStateOf(0) }
     var startMinute by remember { mutableIntStateOf(0) }
     var endHour by remember { mutableIntStateOf(23) }
     var endMinute by remember { mutableIntStateOf(59) }
 
-    val day = selectedDay ?: return
-
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .padding(top = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Export by time range", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-            IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(28.dp)) {
-                Icon(
-                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                    contentDescription = if (expanded) "Collapse" else "Expand",
-                    modifier = Modifier.size(18.dp),
-                )
+        Text(
+            "Export by time · $selectedDay",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text("Start", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TimeSpinner(hour = startHour, minute = startMinute, onHourChange = { startHour = it }, onMinuteChange = { startMinute = it })
+            }
+            Column(Modifier.weight(1f)) {
+                Text("End", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TimeSpinner(hour = endHour, minute = endMinute, onHourChange = { endHour = it }, onMinuteChange = { endMinute = it })
             }
         }
-
-        if (expanded) {
-            Spacer(Modifier.height(6.dp))
-            Text("Date: $day", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(8.dp))
-
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text("Start", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TimeSpinner(hour = startHour, minute = startMinute, onHourChange = { startHour = it }, onMinuteChange = { startMinute = it })
-                }
-                Column(Modifier.weight(1f)) {
-                    Text("End", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TimeSpinner(hour = endHour, minute = endMinute, onHourChange = { endHour = it }, onMinuteChange = { endMinute = it })
-                }
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val startStr = "%02d:%02d".format(startHour, startMinute)
+            val endStr = "%02d:%02d".format(endHour, endMinute)
+            val valid = startHour < endHour || (startHour == endHour && startMinute < endMinute)
+            OutlinedButton(
+                onClick = { onPlay(selectedDay, startStr, endStr) },
+                enabled = !busy && valid,
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Play", fontSize = 11.sp)
             }
-
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val startStr = "%02d:%02d".format(startHour, startMinute)
-                val endStr = "%02d:%02d".format(endHour, endMinute)
-                val valid = startHour < endHour || (startHour == endHour && startMinute < endMinute)
-                OutlinedButton(
-                    onClick = { onPlay(day, startStr, endStr) },
-                    enabled = !busy && valid,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Play", fontSize = 12.sp)
-                }
-                Button(
-                    onClick = { onDownload(day, startStr, endStr) },
-                    enabled = !busy && valid,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimary)
-                    Spacer(Modifier.width(4.dp))
-                    Text("Save", fontSize = 12.sp)
-                }
+            Button(
+                onClick = { onDownload(selectedDay, startStr, endStr) },
+                enabled = !busy && valid,
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onPrimary)
+                Spacer(Modifier.width(4.dp))
+                Text("Save", fontSize = 11.sp)
             }
         }
     }
