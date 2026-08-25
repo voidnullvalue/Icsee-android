@@ -29,6 +29,7 @@ jobs:
 
           TAG="v$VERSION"
           APK="icsee-camera-$TAG.apk"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "apk=$APK" >> "$GITHUB_OUTPUT"
 
@@ -90,15 +91,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          printf '%s\n' \
-            'Release build (assembleRelease). Install directly on an Android device' \
-            '(enable "install unknown apps" for your file manager or browser).' \
-            '' \
-            'Signed with the standard Android debug key so it is sideload-installable;' \
-            'swap in a real keystore/signing config to publish through a store.' \
-            '' \
-            '<sub>♪ ..._that'"'"'s the melody to funkytown_ ♪</sub>' \
-            > release-notes.md
+          {
+            printf '%s\n' \
+              'Release build (assembleRelease). Install directly on an Android device' \
+              '(enable "install unknown apps" for your file manager or browser).' \
+              ''
+
+            if [ "${{ steps.release.outputs.version }}" = "1.1" ]; then
+              printf '%s\n' \
+                '### AVTalk phone-to-camera broadcasting' \
+                '' \
+                'AVTalk is now a verified working feature on compatible cameras with a built-in display/speaker. It sends the Android device camera as H.265 video and microphone audio as G.711 A-law directly to the camera.' \
+                '' \
+                'Major thanks to @jericjan for reverse-engineering AVTalk, providing the working main.py reference implementation, hardware-testing the Android port, and reporting the client preview rotation bug fixed for this release.' \
+                ''
+            fi
+
+            printf '%s\n' \
+              'Signed with the standard Android debug key so it is sideload-installable;' \
+              'swap in a real keystore/signing config to publish through a store.' \
+              '' \
+              '<sub>♪ ..._that'"'"'s the melody to funkytown_ ♪</sub>'
+          } > release-notes.md
 
           gh release create "${{ steps.release.outputs.tag }}" \
             "${{ steps.release.outputs.apk }}" \

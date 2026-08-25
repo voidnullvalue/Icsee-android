@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -68,6 +67,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.South
@@ -87,6 +87,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -160,6 +161,7 @@ fun LiveControlScreen(
     onOpenImageSettings: () -> Unit,
     onOpenMotionDetect: () -> Unit,
     onOpenFullRecordings: () -> Unit,
+    onOpenAvTalk: (() -> Unit)?,
     onBack: () -> Unit,
     viewModel: LiveControlViewModel = viewModel(),
     deviceManagementViewModel: DeviceManagementViewModel = viewModel(),
@@ -207,7 +209,6 @@ fun LiveControlScreen(
 
     fun clampPan(raw: Offset, s: Float): Offset {
         if (s <= 1.01f || viewportSize.width == 0) return Offset.Zero
-        // With center-origin scale, max translation keeps edges reachable.
         val maxX = viewportSize.width * (s - 1f) / 2f
         val maxY = viewportSize.height * (s - 1f) / 2f
         return Offset(
@@ -244,7 +245,6 @@ fun LiveControlScreen(
             }
         }
     }
-    // Auto-hide fullscreen chrome after a few seconds of no interaction.
     LaunchedEffect(fullscreen, fsChromeVisible) {
         if (fullscreen && fsChromeVisible) {
             kotlinx.coroutines.delay(3500)
@@ -252,7 +252,6 @@ fun LiveControlScreen(
         }
     }
 
-    // Keep the display awake while live video is playing (or fullscreen / clip player open).
     val keepAwake = fullscreen ||
         rtspState.isOnAir ||
         dmState.playUri != null ||
@@ -280,7 +279,7 @@ fun LiveControlScreen(
     DisposableEffect(fullscreen) {
         val window = activity?.window
         if (fullscreen) {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
             fsChromeVisible = true
             if (window != null) {
                 WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -313,10 +312,8 @@ fun LiveControlScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color.Black)
-            .navigationBarsPadding(),
+            .background(Color.Black),
     ) {
-        // Top chrome sits *above* the stream (not overlaid) except in fullscreen.
         if (!fullscreen) {
             Row(
                 Modifier
@@ -367,7 +364,6 @@ fun LiveControlScreen(
             }
         }
 
-        // —— Video only (no overlapping controls in normal mode) ——
         Box(
             Modifier
                 .fillMaxWidth()
@@ -489,7 +485,6 @@ fun LiveControlScreen(
                 onFullscreen = { fullscreen = true },
             )
 
-            // —— Tabs: Controls | Recordings | Saved ——
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -534,6 +529,7 @@ fun LiveControlScreen(
                         onPtzCancel = viewModel::onPtzCancel,
                         onGotoPreset = viewModel::gotoPreset,
                         onSavePreset = viewModel::setPreset,
+                        onOpenAvTalk = onOpenAvTalk,
                         onSpeed = viewModel::setSpeedStep,
                         onToggleCruise = viewModel::toggleCruise,
                         onToggleLight = viewModel::toggleLight,
@@ -696,6 +692,7 @@ private fun ControlsPanel(
     onPtzCancel: () -> Unit,
     onGotoPreset: (Int) -> Unit,
     onSavePreset: (Int) -> Unit,
+    onOpenAvTalk: (() -> Unit)?,
     onSpeed: (Int) -> Unit,
     onToggleCruise: () -> Unit,
     onToggleLight: () -> Unit,
@@ -749,7 +746,14 @@ private fun ControlsPanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CompactPtzPad(onPtzDown, onPtzUp, onPtzCancel, Modifier.weight(1f, fill = false))
-                CompactPresets(presetThumbs, presetThumbEpoch, onGotoPreset, onSavePreset, Modifier.weight(1f))
+                CompactPresets(
+                    thumbs = presetThumbs,
+                    thumbEpoch = presetThumbEpoch,
+                    onGoto = onGotoPreset,
+                    onSave = onSavePreset,
+                    onOpenAvTalk = onOpenAvTalk,
+                    modifier = Modifier.weight(1f),
+                )
             }
 
             Row(
@@ -841,10 +845,17 @@ private fun CompactPresets(
     thumbEpoch: Long,
     onGoto: (Int) -> Unit,
     onSave: (Int) -> Unit,
+    onOpenAvTalk: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Tap go · hold save",
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
         listOf(1 to 2, 3 to 4).forEach { (a, b) ->
             Row(
                 Modifier.fillMaxWidth(),
@@ -901,12 +912,16 @@ private fun CompactPresets(
                 }
             }
         }
-        Text(
-            "Tap go · hold save",
-            fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
+        onOpenAvTalk?.let { openAvTalk ->
+            OutlinedButton(
+                onClick = openAvTalk,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.ScreenShare, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Send to screen", fontSize = 12.sp)
+            }
+        }
     }
 }
 

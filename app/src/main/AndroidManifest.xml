@@ -6,8 +6,13 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+
+    <!-- AVTalk can use the phone camera, but the app must remain installable on devices
+         without one (for normal camera-control use and ChromeOS compatibility). -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- BLE pairing: legacy permission model (API < 31) needs classic BLUETOOTH/ADMIN plus
          location (BLE scan results can reveal physical location on these APIs); API 31+

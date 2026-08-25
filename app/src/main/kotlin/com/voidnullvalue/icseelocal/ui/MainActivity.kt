@@ -20,8 +20,8 @@ import com.voidnullvalue.icseelocal.ui.devicemanagement.ImageSettingsScreen
 import com.voidnullvalue.icseelocal.ui.devicemanagement.PlaybackBrowserScreen
 import com.voidnullvalue.icseelocal.ui.diagnostics.DiagnosticsScreen
 import com.voidnullvalue.icseelocal.ui.grid.CameraGridScreen
-import com.voidnullvalue.icseelocal.ui.live.LiveControlScreen
 import com.voidnullvalue.icseelocal.ui.live.LiveControlViewModel
+import com.voidnullvalue.icseelocal.ui.live.LiveControlWithAvTalk
 import com.voidnullvalue.icseelocal.ui.settings.CameraSettingsScreen
 import com.voidnullvalue.icseelocal.ui.theme.IcseeTheme
 
@@ -136,7 +136,7 @@ class MainActivity : ComponentActivity() {
                         prefillBle = current.prefillBle,
                         onDone = { nav.pop() },
                     )
-                    is Screen.LiveControl -> LiveControlScreen(
+                    is Screen.LiveControl -> LiveControlWithAvTalk(
                         cameraId = current.cameraId,
                         onOpenDiagnostics = { nav.push(Screen.Diagnostics(current.cameraId)) },
                         onOpenDeviceManagement = { nav.push(Screen.DeviceManagement(current.cameraId)) },
@@ -152,6 +152,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onOpenFullRecordings = { nav.push(Screen.PlaybackBrowser(current.cameraId)) },
                         onBack = { nav.pop() },
+                        liveControlViewModel = liveControlViewModel,
                         deviceManagementViewModel = deviceManagementViewModel,
                     )
                     is Screen.Diagnostics -> DiagnosticsScreen(
@@ -183,6 +184,7 @@ class MainActivity : ComponentActivity() {
                         onOpenLive = { id -> nav.push(Screen.LiveControl(id)) },
                         onBack = { nav.pop() },
                     )
+                }
                 }
             }
         }
