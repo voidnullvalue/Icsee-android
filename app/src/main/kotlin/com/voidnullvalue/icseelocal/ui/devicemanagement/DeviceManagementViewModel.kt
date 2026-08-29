@@ -1299,7 +1299,7 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
                     val trackIdx = ext.sampleTrackIndex
                     val pts = ext.sampleTime + timeOffsetUs
                     if (pts > maxPtsUs) maxPtsUs = pts
-                    info.set(0, size, pts, ext.sampleFlags)
+                    info.set(0, size, pts, extractorSampleFlagsToCodecFlags(ext.sampleFlags))
                     muxer.writeSampleData(trackMap[trackIdx], buf, info)
                     ext.advance()
                 }
@@ -1310,6 +1310,21 @@ class DeviceManagementViewModel(application: Application) : AndroidViewModel(app
         } finally {
             runCatching { muxer.release() }
         }
+    }
+
+    /**
+     * MediaExtractor sample flags and MediaCodec buffer flags are different namespaces
+     * (e.g. SAMPLE_FLAG_PARTIAL_FRAME=4 vs BUFFER_FLAG_END_OF_STREAM=4).
+     */
+    private fun extractorSampleFlagsToCodecFlags(sampleFlags: Int): Int {
+        var codecFlags = 0
+        if (sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+            codecFlags = codecFlags or android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME
+        }
+        if (sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME != 0) {
+            codecFlags = codecFlags or android.media.MediaCodec.BUFFER_FLAG_PARTIAL_FRAME
+        }
+        return codecFlags
     }
 
     /**
