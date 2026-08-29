@@ -204,9 +204,9 @@ object XmHevcMuxer {
     ) {
         val (w, h) = HevcSps.dimensions(track.sps)
         require(w > 0 && h > 0) { "invalid HEVC dimensions ${w}x$h" }
-        val frames = dropUntilKey(track.frames) { nal ->
-            ((nal[0].toInt() shr 1) and 0x3F) in 16..21
-        }
+        // Prefer true IDR (19/20) over CRA/BLA. Starting on CRA leaves RASL
+        // pictures that reference dropped frames → classic brief green flash.
+        val frames = dropUntilHevcCleanRandomAccess(track.frames)
         require(frames.isNotEmpty()) { "no HEVC keyframe in clip yet" }
         val format = android.media.MediaFormat.createVideoFormat("video/hevc", w, h).apply {
             val csd = ByteArrayOutputStream()
@@ -216,9 +216,7 @@ object XmHevcMuxer {
             }
             setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(csd.toByteArray()))
         }
-        muxAnnexB(format, frames, outFile, durationUs, fps, aac) { nal ->
-            ((nal[0].toInt() shr 1) and 0x3F) in 16..21
-        }
+        muxAnnexB(format, frames, outFile, durationUs, fps, aac) { nal -> hevcIsIdrOrBla(nal) }
     }
 
     private fun writeAvc(
@@ -247,6 +245,40 @@ object XmHevcMuxer {
         return frames.subList(idx, frames.size)
     }
 
+    /**
+     * HEVC random-access cleanup: start at IDR if possible, else BLA, else CRA;
+     * after CRA/BLA, drop RASL pictures that reference frames before the cut
+     * (those decode as a brief green flash).
+     */
+    private fun dropUntilHevcCleanRandomAccess(frames: List<ByteArray>): List<ByteArray> {
+        val idrIdx = frames.indexOfFirst { hevcType(it) in 19..20 }
+        val blaIdx = frames.indexOfFirst { hevcType(it) in 16..18 }
+        val craIdx = frames.indexOfFirst { hevcType(it) == 21 }
+        val start = when {
+            idrIdx >= 0 -> idrIdx
+            blaIdx >= 0 -> blaIdx
+            craIdx >= 0 -> craIdx
+            else -> return emptyList()
+        }
+        val fromKey = frames.subList(start, frames.size)
+        val keyType = hevcType(fromKey.first())
+        if (keyType in 19..20) return fromKey
+        // CRA / BLA: keep the IRAP, drop following RASL (types 8–9).
+        val out = ArrayList<ByteArray>(fromKey.size)
+        out += fromKey.first()
+        for (i in 1 until fromKey.size) {
+            val t = hevcType(fromKey[i])
+            if (t in 8..9) continue
+            out += fromKey[i]
+        }
+        return out
+    }
+
+    private fun hevcType(nal: ByteArray): Int =
+        if (nal.isEmpty()) -1 else (nal[0].toInt() shr 1) and 0x3F
+
+    private fun hevcIsIdrOrBla(nal: ByteArray): Boolean = hevcType(nal) in 16..21
+
     private fun muxAnnexB(
         format: android.media.MediaFormat,
         frames: List<ByteArray>,
@@ -269,21 +301,36 @@ object XmHevcMuxer {
                     (durationUs / frames.size).coerceAtLeast(1_000L)
                 else -> 1_000_000L / fps.coerceAtLeast(1)
             }
-            frames.forEachIndexed { i, nal ->
-                val sample = ByteArray(4 + nal.size).also {
-                    it[0] = 0; it[1] = 0; it[2] = 0; it[3] = 1
-                    System.arraycopy(nal, 0, it, 4, nal.size)
+
+            // MediaMuxer expects tracks interleaved by ascending PTS. Writing all
+            // video then all audio often yields silent MP4s on OEM muxers.
+            var vi = 0
+            var ai = 0
+            val audioSamples = aac?.samples.orEmpty()
+            val audioDur = aac?.sampleDurUs ?: 0L
+            while (vi < frames.size || (audioIdx != null && ai < audioSamples.size)) {
+                val vPts = if (vi < frames.size) vi * frameDurUs else Long.MAX_VALUE
+                val aPts = if (audioIdx != null && ai < audioSamples.size) ai * audioDur else Long.MAX_VALUE
+                if (vPts <= aPts) {
+                    val nal = frames[vi]
+                    val sample = ByteArray(4 + nal.size).also {
+                        it[0] = 0; it[1] = 0; it[2] = 0; it[3] = 1
+                        System.arraycopy(nal, 0, it, 4, nal.size)
+                    }
+                    info.set(
+                        0,
+                        sample.size,
+                        vPts,
+                        if (isKey(nal)) android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME else 0,
+                    )
+                    muxer.writeSampleData(videoIdx, java.nio.ByteBuffer.wrap(sample), info)
+                    vi++
+                } else {
+                    val sample = audioSamples[ai]
+                    info.set(0, sample.size, aPts, android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME)
+                    muxer.writeSampleData(audioIdx!!, java.nio.ByteBuffer.wrap(sample), info)
+                    ai++
                 }
-                info.set(
-                    0,
-                    sample.size,
-                    i * frameDurUs,
-                    if (isKey(nal)) android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME else 0,
-                )
-                muxer.writeSampleData(videoIdx, java.nio.ByteBuffer.wrap(sample), info)
-            }
-            if (audioIdx != null && aac != null) {
-                XmClipAudio.writeSamples(muxer, audioIdx, aac)
             }
             muxer.stop()
         } finally {

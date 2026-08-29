@@ -36,7 +36,11 @@ class SnapshotCapture(private val context: Context) {
     private val handlerThread = HandlerThread("snapshot-pixelcopy").apply { start() }
     private val handler = Handler(handlerThread.looper)
 
-    suspend fun captureFromSurfaceView(surfaceView: SurfaceView, cameraName: String): SnapshotResult {
+    suspend fun captureFromSurfaceView(
+        surfaceView: SurfaceView,
+        cameraName: String,
+        onFrame: ((Bitmap) -> Unit)? = null,
+    ): SnapshotResult {
         val bitmap = try {
             copySurface(surfaceView)
         } catch (e: Exception) {
@@ -44,6 +48,7 @@ class SnapshotCapture(private val context: Context) {
         }
         return withContext(Dispatchers.IO) {
             try {
+                onFrame?.invoke(bitmap)
                 saveBitmap(bitmap, cameraName)
             } finally {
                 bitmap.recycle()

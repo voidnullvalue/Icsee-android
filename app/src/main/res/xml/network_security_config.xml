@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  LAN-only IP camera client. DVRIP and RTSP talk to literal RFC1918 / link-local
+  addresses over cleartext TCP — the vendor protocol has no TLS. Android's
+  domain-config cannot match CIDR ranges for IP literals, so cleartext must be
+  permitted in base-config. The app never contacts vendor cloud endpoints.
+
+  See SECURITY.md.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

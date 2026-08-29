@@ -75,18 +75,31 @@ fun AppScaffold(
                                 BrandGlyph(sizeDp = 30)
                                 Spacer(Modifier.width(10.dp))
                             }
-                            Text(title, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                title,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
                         }
                     },
                     navigationIcon = {
                         if (onBack != null) {
                             IconButton(onClick = onBack) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                )
                             }
                         }
                     },
                     actions = actions,
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+                        actionIconContentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
                 )
             },
             floatingActionButton = floatingActionButton,
@@ -118,7 +131,7 @@ fun SectionCard(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth().padding(bottom = 12.dp),
-        shape = RoundedCornerShape(20.dp),
+        shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainer,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
@@ -128,7 +141,7 @@ fun SectionCard(
                     Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                 }
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
             }
             Spacer(Modifier.height(12.dp))
             content()
@@ -151,7 +164,7 @@ fun NavTile(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
         Row(
@@ -201,7 +214,7 @@ fun GradientButton(
 ) {
     Box(
         modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(MaterialTheme.shapes.medium)
             .then(if (enabled && !busy) Modifier.background(BrandGradient) else Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest))
             .clickable(enabled = enabled && !busy, onClick = onClick)
             .height(48.dp)
@@ -228,7 +241,10 @@ fun GradientButton(
 /** A small colored-dot status pill (connection state, etc.). */
 @Composable
 fun StatusPill(label: String, dot: Color) {
-    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+    ) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
             Spacer(Modifier.width(8.dp))
@@ -237,6 +253,7 @@ fun StatusPill(label: String, dot: Color) {
     }
 }
 
+/** @deprecated Prefer [com.voidnullvalue.icseelocal.ui.theme.StatusColorTokens] via MaterialTheme.statusColors */
 object StatusColors {
     val ok = Color(0xFF34D399)
     val warn = Color(0xFFFFB77C)

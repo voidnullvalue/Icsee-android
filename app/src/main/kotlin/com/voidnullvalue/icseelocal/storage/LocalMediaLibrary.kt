@@ -29,6 +29,18 @@ object LocalMediaLibrary {
         return (photos + videos).sortedByDescending { it.dateTakenMs }
     }
 
+    /**
+     * Newest gallery snapshot for [displayName], matching SnapshotCapture's
+     * `icsee_${safeName}_…` filename prefix. Returns null when none exist.
+     */
+    fun latestImageForCamera(context: Context, displayName: String): LocalMediaItem? {
+        val safe = displayName.replace(Regex("[^A-Za-z0-9_-]"), "_")
+        val prefix = "icsee_${safe}_"
+        return listImages(context)
+            .filter { it.displayName.startsWith(prefix) }
+            .maxByOrNull { it.dateTakenMs }
+    }
+
     private fun listImages(context: Context): List<LocalMediaItem> {
         val out = ArrayList<LocalMediaItem>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

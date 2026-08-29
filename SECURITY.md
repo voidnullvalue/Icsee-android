@@ -120,6 +120,12 @@ BLE ACK was ever captured.
   plain TCP with no TLS option on the control/media/talk ports used. This
   is a deliberate, necessary choice for a LAN-only device controller, not
   an oversight -- there is no cleartext HTTP/API traffic to a backend.
+  `res/xml/network_security_config.xml` documents the same requirement
+  (`cleartextTrafficPermitted` in base-config — Android cannot scope
+  cleartext to RFC1918 CIDRs for IP literals).
+- RTSP error strings and on-screen URL previews are scrubbed via
+  `RtspUrlRedactor` so path-embedded passwords never appear in toasts/logs.
+  Clipboard "Copy URL" still includes credentials intentionally for VLC.
 
 ## Credential storage
 

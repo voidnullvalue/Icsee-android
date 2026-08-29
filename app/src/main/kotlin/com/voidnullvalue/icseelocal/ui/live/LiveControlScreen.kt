@@ -5,7 +5,6 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
-import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,9 +23,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,8 +35,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -49,6 +48,9 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.East
@@ -78,6 +80,7 @@ import androidx.compose.material.icons.filled.West
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -95,6 +98,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -124,29 +128,26 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.voidnullvalue.icseelocal.model.ConnectionState
 import com.voidnullvalue.icseelocal.model.StreamType
 import com.voidnullvalue.icseelocal.ptz.PtzCommand
+import com.voidnullvalue.icseelocal.ui.MainActivity
+import com.voidnullvalue.icseelocal.ui.components.CameraStreamPlayer
+import com.voidnullvalue.icseelocal.ui.components.PlaybackStatusChip
 import com.voidnullvalue.icseelocal.ui.devicemanagement.DeviceManagementViewModel
 import com.voidnullvalue.icseelocal.ui.devicemanagement.RecordedFile
 import com.voidnullvalue.icseelocal.ui.devicemanagement.RecordingDayTimeline
-import com.voidnullvalue.icseelocal.video.RtspPlayerState
+import com.voidnullvalue.icseelocal.video.isOnAir
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private val StatusGreen = Color(0xFF4ADE80)
-private val StatusAmber = Color(0xFFFBBF24)
 private val OverlayBg = Color(0x99000000)
 
 private enum class LiveBottomTab { Controls, Recordings, Saved }
@@ -175,6 +176,7 @@ fun LiveControlScreen(
     val danceModeTriggered by viewModel.danceModeTriggered.collectAsState()
     val muted by viewModel.muted.collectAsState()
     val bitrateBps by viewModel.bitrateBps.collectAsState()
+    val mainStream by viewModel.mainStream.collectAsState()
     val cruiseActive by viewModel.cruiseActive.collectAsState()
     val lightOn by viewModel.lightOn.collectAsState()
     val lightingCaps by viewModel.lightingCaps.collectAsState()
@@ -252,7 +254,7 @@ fun LiveControlScreen(
     }
 
     val keepAwake = fullscreen ||
-        rtspState is RtspPlayerState.Playing ||
+        rtspState.isOnAir ||
         dmState.playUri != null ||
         dmState.playBuffering ||
         localMediaPlayUri != null ||
@@ -267,6 +269,14 @@ fun LiveControlScreen(
         }
     }
 
+    val mainActivity = activity as? MainActivity
+    DisposableEffect(rtspState.isOnAir) {
+        mainActivity?.setPipEligible(rtspState.isOnAir)
+        onDispose { mainActivity?.setPipEligible(false) }
+    }
+
+    // Immersive chrome + force landscape in fullscreen. configChanges on the
+    // Activity keeps the nav stack alive across the orientation change.
     DisposableEffect(fullscreen) {
         val window = activity?.window
         if (fullscreen) {
@@ -320,7 +330,7 @@ fun LiveControlScreen(
                 Column(Modifier.weight(1f)) {
                     Text(camera?.displayName ?: "Live", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, fontSize = 15.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        StatusPill(state, rtspState is RtspPlayerState.Playing)
+                        PlaybackStatusChip(rtspState)
                         if (bitrateBps > 0) {
                             Text(formatBitrate(bitrateBps), color = Color.White.copy(0.7f), fontSize = 11.sp)
                         }
@@ -400,33 +410,38 @@ fun LiveControlScreen(
                         translationY = offset.y
                     },
             ) {
-                VideoSurface(viewModel, rtspState, Modifier.fillMaxSize())
+                CameraStreamPlayer(
+                    exoPlayer = viewModel.rtspPlayer.exoPlayer,
+                    playbackState = rtspState,
+                    modifier = Modifier.fillMaxSize(),
+                    title = if (fullscreen) camera?.displayName else null,
+                    mainStream = mainStream,
+                    muted = muted,
+                    recording = recording,
+                    recordElapsedLabel = if (recording) formatDuration(recordElapsedMs) else null,
+                    bitrateLabel = if (bitrateBps > 0) formatBitrate(bitrateBps) else null,
+                    showOverlay = true,
+                    overlayInitiallyVisible = fullscreen,
+                    fullscreen = fullscreen,
+                    onBindPlayerView = viewModel::bindPlayerView,
+                    onToggleMute = viewModel::toggleMute,
+                    onToggleQuality = {
+                        viewModel.setStreamType(
+                            if (mainStream) StreamType.SUB else StreamType.MAIN,
+                        )
+                    },
+                    onSnapshot = viewModel::takeSnapshot,
+                    onToggleRecording = viewModel::toggleRecording,
+                    onReconnect = viewModel::reconnectRtsp,
+                    onFullscreen = { fullscreen = true },
+                    onExitFullscreen = { resetZoom(); fullscreen = false },
+                    onEnterPip = { mainActivity?.enterPipIfEligible() },
+                    onOverlayVisibilityChanged = { visible -> if (fullscreen) fsChromeVisible = visible },
+                )
             }
 
+            // Legacy fullscreen top chrome removed — CameraStreamPlayer owns overlay.
             if (fullscreen) {
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = fsChromeVisible,
-                    enter = androidx.compose.animation.fadeIn(),
-                    exit = androidx.compose.animation.fadeOut(),
-                    modifier = Modifier.align(Alignment.TopStart),
-                ) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .statusBarsPadding()
-                            .padding(4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(onClick = { resetZoom(); fullscreen = false }) {
-                            Icon(Icons.Default.Close, "Exit fullscreen", tint = Color.White)
-                        }
-                        Text(camera?.displayName ?: "Live", color = Color.White, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.weight(1f))
-                        if (recording) {
-                            Text("REC ${formatDuration(recordElapsedMs)}", color = Color(0xFFFF6B6B), fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
                 statusToast?.let { msg ->
                     Text(
                         msg,
@@ -434,7 +449,7 @@ fun LiveControlScreen(
                         fontSize = 12.sp,
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = 16.dp)
+                            .padding(bottom = 72.dp)
                             .clip(RoundedCornerShape(10.dp))
                             .background(OverlayBg)
                             .padding(horizontal = 12.dp, vertical = 6.dp),
@@ -444,26 +459,20 @@ fun LiveControlScreen(
         }
 
         if (!fullscreen) {
+            // —— Action row directly under stream ——
             StreamActionRow(
-                mainStream = camera?.streamType != StreamType.SUB,
+                mainStream = mainStream,
                 muted = muted,
                 recording = recording,
-                talking = talking,
-                hasMicPermission = hasMicPermission,
                 canResetZoom = scale > 1.01f,
                 onToggleQuality = {
                     viewModel.setStreamType(
-                        if (camera?.streamType == StreamType.MAIN) StreamType.SUB else StreamType.MAIN,
+                        if (mainStream) StreamType.SUB else StreamType.MAIN,
                     )
                 },
                 onToggleMute = viewModel::toggleMute,
                 onSnapshot = viewModel::takeSnapshot,
                 onToggleRecording = viewModel::toggleRecording,
-                onTalkPress = {
-                    if (!hasMicPermission) micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    else viewModel.startTalk()
-                },
-                onTalkRelease = viewModel::stopTalk,
                 onZoomIn = { bumpZoom(1.25f) },
                 onZoomOut = { bumpZoom(0.8f) },
                 onResetZoom = { resetZoom() },
@@ -501,6 +510,8 @@ fun LiveControlScreen(
                     LiveBottomTab.Controls -> ControlsPanel(
                         state = state,
                         talkError = talkError,
+                        talking = talking,
+                        hasMicPermission = hasMicPermission,
                         speed = speed,
                         cruiseActive = cruiseActive,
                         lightOn = lightOn,
@@ -515,6 +526,11 @@ fun LiveControlScreen(
                         onGotoPreset = viewModel::gotoPreset,
                         onSavePreset = viewModel::setPreset,
                         onOpenAvTalk = onOpenAvTalk,
+                        onTalkPress = {
+                            if (!hasMicPermission) micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            else viewModel.startTalk()
+                        },
+                        onTalkRelease = viewModel::stopTalk,
                         onSpeed = viewModel::setSpeedStep,
                         onToggleCruise = viewModel::toggleCruise,
                         onToggleLight = viewModel::toggleLight,
@@ -528,10 +544,11 @@ fun LiveControlScreen(
                         progress = dmState.downloadProgressBytes,
                         playBuffering = dmState.playBuffering,
                         error = dmState.errorMessage,
-                        onRefresh = deviceManagementViewModel::loadAllRecordings,
                         onSelectDay = deviceManagementViewModel::selectRecordingDay,
                         onPlay = deviceManagementViewModel::playClip,
                         onDownload = deviceManagementViewModel::downloadClip,
+                        onPlayRange = deviceManagementViewModel::playTimeRange,
+                        onDownloadRange = deviceManagementViewModel::downloadTimeRange,
                     )
                     LiveBottomTab.Saved -> SavedMediaPanel(
                         items = localMedia,
@@ -587,15 +604,11 @@ private fun StreamActionRow(
     mainStream: Boolean,
     muted: Boolean,
     recording: Boolean,
-    talking: Boolean,
-    hasMicPermission: Boolean,
     canResetZoom: Boolean,
     onToggleQuality: () -> Unit,
     onToggleMute: () -> Unit,
     onSnapshot: () -> Unit,
     onToggleRecording: () -> Unit,
-    onTalkPress: () -> Unit,
-    onTalkRelease: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onResetZoom: () -> Unit,
@@ -628,32 +641,42 @@ private fun StreamActionRow(
             ActionIcon(Icons.Default.RestartAlt, onResetZoom)
         }
         ActionIcon(Icons.Default.Fullscreen, onFullscreen)
-        val talkBg by animateColorAsState(
-            if (talking) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
-            label = "talk",
-        )
-        Row(
-            Modifier
-                .widthIn(min = 120.dp)
-                .height(40.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(talkBg)
-                .pointerInput(hasMicPermission) {
-                    awaitEachGesture {
-                        awaitFirstDown()
-                        onTalkPress()
-                        waitForUpOrCancellation()
-                        onTalkRelease()
-                    }
+    }
+}
+
+@Composable
+private fun HoldToTalkButton(
+    talking: Boolean,
+    hasMicPermission: Boolean,
+    onTalkPress: () -> Unit,
+    onTalkRelease: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val talkBg by animateColorAsState(
+        if (talking) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
+        label = "talk",
+    )
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(talkBg)
+            .pointerInput(hasMicPermission) {
+                awaitEachGesture {
+                    awaitFirstDown()
+                    onTalkPress()
+                    waitForUpOrCancellation()
+                    onTalkRelease()
                 }
-                .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Default.Mic, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(if (talking) "Talking…" else "Hold to talk", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-        }
+            }
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.Mic, null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(if (talking) "Talking…" else "Hold to talk", fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -662,6 +685,8 @@ private fun StreamActionRow(
 private fun ControlsPanel(
     state: ConnectionState,
     talkError: String?,
+    talking: Boolean,
+    hasMicPermission: Boolean,
     speed: Int,
     cruiseActive: Boolean,
     lightOn: Boolean,
@@ -676,6 +701,8 @@ private fun ControlsPanel(
     onGotoPreset: (Int) -> Unit,
     onSavePreset: (Int) -> Unit,
     onOpenAvTalk: (() -> Unit)?,
+    onTalkPress: () -> Unit,
+    onTalkRelease: () -> Unit,
     onSpeed: (Int) -> Unit,
     onToggleCruise: () -> Unit,
     onToggleLight: () -> Unit,
@@ -724,18 +751,50 @@ private fun ControlsPanel(
             talkError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
 
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
             ) {
-                CompactPtzPad(onPtzDown, onPtzUp, onPtzCancel, Modifier.weight(1f, fill = false))
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "Pan · tilt · zoom",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        CompactPtzPad(
+                            onPtzDown,
+                            onPtzUp,
+                            onPtzCancel,
+                            Modifier.fillMaxWidth(),
+                        )
+                    }
+                    HoldToTalkButton(
+                        talking = talking,
+                        hasMicPermission = hasMicPermission,
+                        onTalkPress = onTalkPress,
+                        onTalkRelease = onTalkRelease,
+                    )
+                }
                 CompactPresets(
                     thumbs = presetThumbs,
                     thumbEpoch = presetThumbEpoch,
                     onGoto = onGotoPreset,
                     onSave = onSavePreset,
                     onOpenAvTalk = onOpenAvTalk,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
                 )
             }
 
@@ -803,17 +862,17 @@ private fun CompactPtzPad(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             PtzPadButton(Icons.Default.NorthWest, "Up-left", { onDown(PtzCommand.DIRECTION_LEFT_UP) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.North, "Up", { onDown(PtzCommand.DIRECTION_UP) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.NorthEast, "Up-right", { onDown(PtzCommand.DIRECTION_RIGHT_UP) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             PtzPadButton(Icons.Default.West, "Left", { onDown(PtzCommand.DIRECTION_LEFT) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.Stop, "Stop", onUp, onUp, onUp, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.East, "Right", { onDown(PtzCommand.DIRECTION_RIGHT) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             PtzPadButton(Icons.Default.SouthWest, "Down-left", { onDown(PtzCommand.DIRECTION_LEFT_DOWN) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.South, "Down", { onDown(PtzCommand.DIRECTION_DOWN) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
             PtzPadButton(Icons.Default.SouthEast, "Down-right", { onDown(PtzCommand.DIRECTION_RIGHT_DOWN) }, onUp, onCancel, sizeDp = 56, iconDp = 28)
@@ -832,65 +891,70 @@ private fun CompactPresets(
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            "Tap go · hold save",
-            fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
-        listOf(1 to 2, 3 to 4).forEach { (a, b) ->
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                listOf(a, b).forEach { n ->
-                    val path = thumbs[n]
-                    val bmp = remember(path, thumbEpoch) {
-                        path?.let { p ->
-                            val f = File(p)
-                            if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Tap go · hold save",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+            listOf(1 to 2, 3 to 4).forEach { (a, b) ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(a, b).forEach { n ->
+                        val path = thumbs[n]
+                        val bmp = remember(path, thumbEpoch) {
+                            path?.let { p ->
+                                val f = File(p)
+                                if (f.exists()) BitmapFactory.decodeFile(p)?.asImageBitmap() else null
+                            }
                         }
-                    }
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF1A1F26))
-                            .combinedClickable(
-                                onClick = { onGoto(n) },
-                                onLongClick = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onSave(n)
-                                },
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (bmp != null) {
-                            Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                        } else {
-                            Image(
-                                painter = androidx.compose.ui.res.painterResource(
-                                    id = com.voidnullvalue.icseelocal.R.drawable.ic_preset_placeholder,
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF1A1F26))
+                                .combinedClickable(
+                                    onClick = { onGoto(n) },
+                                    onLongClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onSave(n)
+                                    },
                                 ),
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop,
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (bmp != null) {
+                                Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            } else {
+                                Image(
+                                    painter = androidx.compose.ui.res.painterResource(
+                                        id = com.voidnullvalue.icseelocal.R.drawable.ic_preset_placeholder,
+                                    ),
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop,
+                                )
+                            }
+                            Text(
+                                "$n",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .padding(6.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0x99000000))
+                                    .padding(horizontal = 4.dp, vertical = 1.dp),
                             )
                         }
-                        Text(
-                            "$n",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(6.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(Color(0x99000000))
-                                .padding(horizontal = 4.dp, vertical = 1.dp),
-                        )
                     }
                 }
             }
@@ -918,10 +982,11 @@ private fun LiveRecordingsPanel(
     progress: Long,
     playBuffering: Boolean,
     error: String?,
-    onRefresh: () -> Unit,
     onSelectDay: (String) -> Unit,
     onPlay: (RecordedFile) -> Unit,
     onDownload: (RecordedFile) -> Unit,
+    onPlayRange: (date: String, startTime: String, endTime: String) -> Unit = { _, _, _ -> },
+    onDownloadRange: (date: String, startTime: String, endTime: String) -> Unit = { _, _, _ -> },
 ) {
     val all = clips.orEmpty()
     val dayKeys = remember(all) { all.map { it.dayKey }.distinct().sortedDescending() }
@@ -931,57 +996,89 @@ private fun LiveRecordingsPanel(
     }
     val busy = downloading != null || playBuffering
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Recordings", fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = onRefresh, enabled = !querying) {
-                Text(if (querying) "Loading…" else "Refresh", fontSize = 12.sp)
-            }
-        }
+    Column(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 4.dp)) {
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
 
-        if (dayKeys.isNotEmpty()) {
+        var exportExpanded by remember { mutableStateOf(false) }
+
+        if (dayKeys.isNotEmpty() || day != null) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                dayKeys.forEach { key ->
-                    val count = all.count { it.dayKey == key }
-                    RecordingDayChip(
-                        label = recordingDayLabel(key),
-                        count = count,
-                        selected = key == day,
-                        onClick = { onSelectDay(key) },
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    dayKeys.forEach { key ->
+                        val count = all.count { it.dayKey == key }
+                        RecordingDayChip(
+                            label = recordingDayLabel(key),
+                            count = count,
+                            selected = key == day,
+                            onClick = { onSelectDay(key) },
+                        )
+                    }
+                }
+                if (day != null) {
+                    TimeRangeExportToggle(
+                        expanded = exportExpanded,
+                        onToggle = { exportExpanded = !exportExpanded },
                     )
                 }
             }
+        }
+
+        if (exportExpanded && day != null) {
+            TimeRangeExportPanel(
+                selectedDay = day,
+                busy = busy,
+                onPlay = onPlayRange,
+                onDownload = onDownloadRange,
+            )
         }
 
         if (day != null && dayClips.isNotEmpty()) {
             RecordingDayTimeline(
                 day = day,
                 clips = dayClips,
+                compact = true,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
+                    .padding(top = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
                 onClipClick = onPlay,
             )
-            Spacer(Modifier.height(8.dp))
         }
 
         when {
-            querying && clips == null -> CircularProgressIndicator(Modifier.padding(top = 16.dp).align(Alignment.CenterHorizontally))
+            querying && clips == null -> CircularProgressIndicator(
+                Modifier
+                    .padding(top = 12.dp)
+                    .size(28.dp)
+                    .align(Alignment.CenterHorizontally),
+                strokeWidth = 2.dp,
+            )
             dayClips.isEmpty() -> Text(
                 if (querying) "Loading…" else "No recordings for this day.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 12.dp),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 8.dp),
             )
-            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
+            else -> LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 4.dp),
+            ) {
                 items(dayClips, key = { it.fileName + it.beginTime }) { clip ->
                     LiveClipRow(
                         clip = clip,
@@ -1000,16 +1097,21 @@ private fun LiveRecordingsPanel(
 @Composable
 private fun RecordingDayChip(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
     val bg = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest
-    Column(
+    Row(
         Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(bg)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-        Text("$count", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            "$count",
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -1027,21 +1129,21 @@ private fun LiveClipRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .combinedClickable(enabled = !busy || downloading, onClick = onPlay),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             Modifier
-                .width(4.dp)
-                .height(60.dp)
+                .width(3.dp)
+                .height(40.dp)
                 .background(if (clip.hasActivity) activityGreen else Color(0xFF38BDF8).copy(alpha = 0.45f)),
         )
         Row(
             Modifier
                 .weight(1f)
-                .padding(8.dp),
+                .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val bmp = remember(clip.thumbPath) {
@@ -1052,8 +1154,8 @@ private fun LiveClipRow(
             }
             Box(
                 Modifier
-                    .size(72.dp, 44.dp)
-                    .clip(RoundedCornerShape(6.dp))
+                    .size(56.dp, 34.dp)
+                    .clip(RoundedCornerShape(5.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerHighest),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1063,40 +1165,40 @@ private fun LiveClipRow(
                     Icon(
                         if (clip.hasActivity) Icons.Default.Sensors else Icons.Default.Videocam,
                         null,
-                        Modifier.size(18.dp),
+                        Modifier.size(16.dp),
                         tint = if (clip.hasActivity) activityGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(clip.beginTime.substringAfter(' ', clip.beginTime), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(clip.beginTime.substringAfter(' ', clip.beginTime), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         clip.activityLabel,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = if (clip.hasActivity) activityGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text("·", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("·", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
                         when {
                             downloading -> "%.1f MB…".format(progress / 1e6)
                             clip.isDownloaded -> "On device"
                             else -> "On camera"
                         },
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
             if (!clip.isDownloaded) {
-                IconButton(onClick = onDownload, enabled = !busy || downloading) {
+                IconButton(onClick = onDownload, enabled = !busy || downloading, modifier = Modifier.size(32.dp)) {
                     if (downloading) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     } else {
-                        Icon(Icons.Default.CloudDownload, "Download", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.Default.CloudDownload, "Download", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -1294,24 +1396,6 @@ private fun SmallOverlayBtn(icon: ImageVector, desc: String, onClick: () -> Unit
     }
 }
 
-@Composable
-private fun StatusPill(state: ConnectionState, playing: Boolean) {
-    val (dot, text) = when {
-        playing -> StatusGreen to "LIVE"
-        state is ConnectionState.Authenticated || state is ConnectionState.Streaming -> StatusGreen to "CONNECTED"
-        state is ConnectionState.Failed || state is ConnectionState.Disconnected -> MaterialTheme.colorScheme.error to "OFFLINE"
-        else -> StatusAmber to state.label.uppercase()
-    }
-    Row(
-        Modifier.clip(CircleShape).background(OverlayBg).padding(horizontal = 8.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        Box(Modifier.size(6.dp).clip(CircleShape).background(dot))
-        Text(text, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
 private fun formatBitrate(bps: Long): String {
     val kbps = bps / 1000.0
     return if (kbps >= 1000) "%.1f Mbps".format(kbps / 1000) else "%.0f kbps".format(kbps)
@@ -1321,53 +1405,6 @@ private fun formatDuration(ms: Long): String {
     val s = (ms / 1000) % 60
     val m = (ms / 1000) / 60
     return "%d:%02d".format(m, s)
-}
-
-@UnstableApi
-@Composable
-private fun VideoSurface(viewModel: LiveControlViewModel, rtspState: RtspPlayerState, modifier: Modifier) {
-    val exoPlayer = viewModel.rtspPlayer.exoPlayer
-    var playerView by remember { mutableStateOf<PlayerView?>(null) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START) {
-                playerView?.let { it.player = null; it.player = exoPlayer }
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            viewModel.bindPlayerView(null)
-        }
-    }
-    Box(modifier, contentAlignment = Alignment.Center) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    player = exoPlayer
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    playerView = this
-                    viewModel.bindPlayerView(this)
-                }
-            },
-            update = { v -> playerView = v; viewModel.bindPlayerView(v) },
-        )
-        if (rtspState !is RtspPlayerState.Playing) {
-            Text(
-                when (val s = rtspState) {
-                    is RtspPlayerState.Idle -> "Idle"
-                    is RtspPlayerState.Connecting -> "Connecting…"
-                    is RtspPlayerState.Error -> "Video error: ${s.message}"
-                    is RtspPlayerState.Playing -> ""
-                },
-                color = Color.White.copy(0.7f),
-            )
-        }
-    }
 }
 
 @UnstableApi
@@ -1399,4 +1436,121 @@ private fun FunkytownDanceDialog(onDismiss: () -> Unit, onStart: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun TimeRangeExportToggle(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (expanded) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceContainerHighest,
+            )
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text("Export", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Icon(
+            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = if (expanded) "Collapse export" else "Export by time range",
+            modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+@Composable
+private fun TimeRangeExportPanel(
+    selectedDay: String,
+    busy: Boolean,
+    onPlay: (date: String, startTime: String, endTime: String) -> Unit,
+    onDownload: (date: String, startTime: String, endTime: String) -> Unit,
+) {
+    var startHour by remember { mutableIntStateOf(0) }
+    var startMinute by remember { mutableIntStateOf(0) }
+    var endHour by remember { mutableIntStateOf(23) }
+    var endMinute by remember { mutableIntStateOf(59) }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        Text(
+            "Export by time · $selectedDay",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text("Start", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TimeSpinner(hour = startHour, minute = startMinute, onHourChange = { startHour = it }, onMinuteChange = { startMinute = it })
+            }
+            Column(Modifier.weight(1f)) {
+                Text("End", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TimeSpinner(hour = endHour, minute = endMinute, onHourChange = { endHour = it }, onMinuteChange = { endMinute = it })
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val startStr = "%02d:%02d".format(startHour, startMinute)
+            val endStr = "%02d:%02d".format(endHour, endMinute)
+            val valid = startHour < endHour || (startHour == endHour && startMinute < endMinute)
+            OutlinedButton(
+                onClick = { onPlay(selectedDay, startStr, endStr) },
+                enabled = !busy && valid,
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Play", fontSize = 11.sp)
+            }
+            Button(
+                onClick = { onDownload(selectedDay, startStr, endStr) },
+                enabled = !busy && valid,
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onPrimary)
+                Spacer(Modifier.width(4.dp))
+                Text("Save", fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimeSpinner(hour: Int, minute: Int, onHourChange: (Int) -> Unit, onMinuteChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        NumberSpinnerField(value = hour, range = 0..23, onChange = onHourChange, modifier = Modifier.width(44.dp))
+        Text(":", fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 2.dp))
+        NumberSpinnerField(value = minute, range = 0..59, onChange = onMinuteChange, modifier = Modifier.width(44.dp))
+    }
+}
+
+@Composable
+private fun NumberSpinnerField(value: Int, range: IntRange, onChange: (Int) -> Unit, modifier: Modifier = Modifier) {
+    var text by remember(value) { mutableStateOf("%02d".format(value)) }
+    androidx.compose.material3.OutlinedTextField(
+        value = text,
+        onValueChange = { raw ->
+            val digits = raw.filter { it.isDigit() }.take(2)
+            text = digits
+            digits.toIntOrNull()?.coerceIn(range)?.let(onChange)
+        },
+        modifier = modifier.height(44.dp),
+        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+    )
 }

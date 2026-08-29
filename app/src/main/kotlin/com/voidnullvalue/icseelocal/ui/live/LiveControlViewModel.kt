@@ -26,11 +26,12 @@ import com.voidnullvalue.icseelocal.ptz.PtzController
 import com.voidnullvalue.icseelocal.session.CameraCredentials
 import com.voidnullvalue.icseelocal.session.CameraSessionManager
 import com.voidnullvalue.icseelocal.storage.CameraStore
+import com.voidnullvalue.icseelocal.storage.CameraThumbStore
 import com.voidnullvalue.icseelocal.storage.PresetThumbStore
 import com.voidnullvalue.icseelocal.video.LiveStreamRecorder
 import com.voidnullvalue.icseelocal.video.RecordedVideoStore
 import com.voidnullvalue.icseelocal.video.RtspPlayerState
-import com.voidnullvalue.icseelocal.video.RtspVideoPlayer
+import com.voidnullvalue.icseelocal.video.RtspStreamManager
 import com.voidnullvalue.icseelocal.video.SavedVideo
 import com.voidnullvalue.icseelocal.video.SnapshotCapture
 import com.voidnullvalue.icseelocal.video.SnapshotResult
@@ -40,10 +41,12 @@ import java.io.File
 import java.lang.ref.WeakReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
@@ -56,6 +59,7 @@ import kotlinx.serialization.json.put
 class LiveControlViewModel(application: Application) : AndroidViewModel(application), DefaultLifecycleObserver {
     private val store = CameraStore(application)
     private val presetThumbs = PresetThumbStore(application)
+    private val cameraThumbs = CameraThumbStore(application)
     private val microphone = MicrophoneSource(application)
     // The app-wide session owner. This ViewModel no longer creates or shuts down
     // CameraSessionManagers -- it acquires the shared one for the camera it's showing
@@ -103,10 +107,13 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     // running for stats/diagnostics -- its media-byte gap is still open,
     // see PROTOCOL_STATUS.md -- but the RTSP player is what's actually shown.
     @UnstableApi
-    val rtspPlayer = RtspVideoPlayer(application)
+    val rtspPlayer = RtspStreamManager(application)
 
     @UnstableApi
     val rtspState: StateFlow<RtspPlayerState> = rtspPlayer.state
+
+    @UnstableApi
+    val mainStream: StateFlow<Boolean> = rtspPlayer.mainStream
 
     private val _camera = MutableStateFlow<CameraDescriptor?>(null)
     val camera: StateFlow<CameraDescriptor?> = _camera.asStateFlow()
@@ -166,6 +173,7 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     private var recordOutFile: File? = null
     private var recordTicker: Job? = null
     private var playerViewRef: WeakReference<PlayerView>? = null
+    private var listThumbJob: Job? = null
 
     @UnstableApi
     val muted: StateFlow<Boolean> = rtspPlayer.muted
@@ -174,7 +182,20 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     val bitrateBps: StateFlow<Long> = rtspPlayer.bitrateBps
 
     fun bindPlayerView(view: PlayerView?) {
-        playerViewRef = view?.let { WeakReference(it) }
+        if (view == null) {
+            // Composition disposing — grab a list thumb while the frame is still on the surface.
+            val stillBound = playerViewRef?.get()
+            val cameraId = held?.id ?: _camera.value?.id
+            if (stillBound != null && cameraId != null) {
+                captureListThumbBlocking(cameraId, stillBound)
+            }
+            stopListThumbUpdates()
+            playerViewRef = null
+            return
+        }
+        playerViewRef = WeakReference(view)
+        val cameraId = held?.id ?: _camera.value?.id
+        if (cameraId != null) startListThumbUpdates(cameraId)
     }
 
     fun clearStatusToast() {
@@ -183,6 +204,16 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
 
     @UnstableApi
     fun toggleMute() = rtspPlayer.toggleMute()
+
+    @UnstableApi
+    fun toggleStreamQuality() {
+        val found = _camera.value ?: return
+        val nextMain = !rtspPlayer.mainStream.value
+        setStreamType(if (nextMain) StreamType.MAIN else StreamType.SUB)
+    }
+
+    @UnstableApi
+    fun reconnectRtsp() = rtspPlayer.reconnect()
 
     @UnstableApi
     fun setStreamType(type: StreamType) {
@@ -271,18 +302,22 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
         val name = _camera.value?.displayName ?: "camera"
+        val cameraId = _camera.value?.id
         viewModelScope.launch {
             val capture = SnapshotCapture(getApplication())
             val surface = findSurfaceView(view)
+            val rememberThumb: (android.graphics.Bitmap) -> Unit = { bmp ->
+                if (cameraId != null) cameraThumbs.saveJpeg(cameraId, bmp)
+            }
             val result = if (surface != null) {
-                capture.captureFromSurfaceView(surface, name)
+                capture.captureFromSurfaceView(surface, name, onFrame = rememberThumb)
             } else {
                 // TextureView path: grab bitmap directly
                 val texture = findTextureView(view)
                 val bmp = texture?.bitmap
                 if (bmp == null) SnapshotResult.Failure("no frame")
                 else {
-                    // Reuse SnapshotCapture's gallery save via a temp surface path — save manually
+                    rememberThumb(bmp)
                     saveBitmapSnapshot(bmp, name).also { bmp.recycle() }
                 }
             }
@@ -412,6 +447,8 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     companion object {
+        private const val LIST_THUMB_INTERVAL_MS = 4_000L
+
         /**
          * Dance easter-egg media: the Funkytown video on the Internet Archive, a
          * plain DRM-free MP4 (H.264 + AAC). The on-screen ExoPlayer streams it
@@ -532,6 +569,9 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     @UnstableApi
     private fun releaseSession() {
         val camera = held ?: return
+        stopListThumbUpdates()
+        // Last live frame → Devices-list thumbnail, before RTSP/surface teardown.
+        captureListThumbBlocking(camera.id, playerViewRef?.get())
         held = null
         sessionStateJob?.cancel()
         sessionStateJob = null
@@ -548,6 +588,80 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
         rtspPlayer.stop()
         sessionManager = null
         registry.release(camera.host, camera.dvripPort)
+    }
+
+    private fun startListThumbUpdates(cameraId: String) {
+        if (listThumbJob?.isActive == true) return
+        listThumbJob = viewModelScope.launch {
+            delay(1_500)
+            while (isActive) {
+                val view = playerViewRef?.get()
+                val id = held?.id ?: _camera.value?.id ?: cameraId
+                if (view != null) {
+                    withContext(Dispatchers.Main.immediate) {
+                        captureListThumbBlocking(id, view)
+                    }
+                }
+                delay(LIST_THUMB_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun stopListThumbUpdates() {
+        listThumbJob?.cancel()
+        listThumbJob = null
+    }
+
+    /**
+     * Writes the current PlayerView frame into [CameraThumbStore] for [cameraId].
+     * Best-effort so it can finish before the stream is abandoned.
+     */
+    private fun captureListThumbBlocking(cameraId: String, view: PlayerView?) {
+        if (view == null) return
+        runCatching {
+            val bmp = grabPlayerBitmap(view) ?: return
+            try {
+                cameraThumbs.saveJpeg(cameraId, bmp)
+            } finally {
+                bmp.recycle()
+            }
+        }
+    }
+
+    private fun grabPlayerBitmap(view: PlayerView): android.graphics.Bitmap? {
+        findTextureView(view)?.bitmap?.takeUnless { it.isRecycled }?.let { return it }
+        val surface = findSurfaceView(view) ?: return null
+        if (surface.width <= 0 || surface.height <= 0) return null
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            surface.width,
+            surface.height,
+            android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        val thread = android.os.HandlerThread("list-thumb").also { it.start() }
+        return try {
+            val handler = android.os.Handler(thread.looper)
+            val done = java.util.concurrent.CountDownLatch(1)
+            var success = false
+            android.view.PixelCopy.request(
+                surface,
+                bitmap,
+                { result ->
+                    success = result == android.view.PixelCopy.SUCCESS
+                    done.countDown()
+                },
+                handler,
+            )
+            done.await(750, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (success) bitmap else {
+                bitmap.recycle()
+                null
+            }
+        } catch (_: Exception) {
+            bitmap.recycle()
+            null
+        } finally {
+            thread.quitSafely()
+        }
     }
 
     private fun wireControllers(found: CameraDescriptor, state: ConnectionState.Authenticated) {
