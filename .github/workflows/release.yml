@@ -9,77 +9,117 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 jobs:
   build:
+    # Commits made by this workflow use GITHUB_TOKEN and normally do not
+    # retrigger workflows, but keep an explicit guard to prevent release loops.
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Determine release version
+      - name: Determine and bump release version
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          VERSION="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n1)"
-          if [ -z "$VERSION" ]; then
-            echo "Could not determine versionName from app/build.gradle.kts" >&2
+          set -euo pipefail
+
+          CURRENT_VERSION="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n1)"
+          CURRENT_CODE="$(sed -n 's/^[[:space:]]*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -n1)"
+
+          if [ -z "$CURRENT_VERSION" ] || [ -z "$CURRENT_CODE" ]; then
+            echo "Could not determine versionName/versionCode from app/build.gradle.kts" >&2
             exit 1
+          fi
+
+          CURRENT_TAG="v$CURRENT_VERSION"
+          VERSION="$CURRENT_VERSION"
+          CODE="$CURRENT_CODE"
+          TARGET_SHA="$GITHUB_SHA"
+
+          # If the checked-in version has already shipped, this is an ordinary
+          # main update/merge. Automatically advance the patch version and
+          # Android versionCode before building the release.
+          if gh release view "$CURRENT_TAG" >/dev/null 2>&1; then
+            if [[ "$CURRENT_VERSION" =~ ^([0-9]+)\.([0-9]+)(\.([0-9]+))?$ ]]; then
+              MAJOR="${BASH_REMATCH[1]}"
+              MINOR="${BASH_REMATCH[2]}"
+              PATCH="${BASH_REMATCH[4]:-0}"
+            else
+              echo "versionName '$CURRENT_VERSION' is not X.Y or X.Y.Z; refusing to guess the next release" >&2
+              exit 1
+            fi
+
+            VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+            CODE="$((CURRENT_CODE + 1))"
+
+            sed -i -E "s/^([[:space:]]*)versionCode = [0-9]+/\\1versionCode = $CODE/" app/build.gradle.kts
+            sed -i -E "s/^([[:space:]]*)versionName = \"[^\"]+\"/\\1versionName = \"$VERSION\"/" app/build.gradle.kts
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add app/build.gradle.kts
+            git commit -m "chore(release): bump version to $VERSION"
+            git push origin HEAD:main
+            TARGET_SHA="$(git rev-parse HEAD)"
           fi
 
           TAG="v$VERSION"
           APK="icsee-camera-$TAG.apk"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "apk=$APK" >> "$GITHUB_OUTPUT"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release $TAG already exists; nothing to publish."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG already exists; refusing to overwrite it." >&2
+            exit 1
           fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "apk=$APK" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+
+          echo "Publishing $TAG (versionCode $CODE) at $TARGET_SHA"
 
       # The committed gradle.properties pins aapt2 to a local ARM/proot toolchain
       # path (see BUILDING_IN_PROOT.md) that does not exist on CI. Drop it so the
       # standard Maven-distributed aapt2 is used on the x86_64 runner.
       - name: Neutralize proot-only aapt2 override
-        if: steps.release.outputs.exists != 'true'
         run: sed -i '/android.aapt2FromMavenOverride/d' gradle.properties
 
       - name: Set up JDK 17
-        if: steps.release.outputs.exists != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android SDK
-        if: steps.release.outputs.exists != 'true'
         uses: android-actions/setup-android@v3
 
       - name: Install required SDK packages
-        if: steps.release.outputs.exists != 'true'
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up Gradle
-        if: steps.release.outputs.exists != 'true'
         uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests
-        if: steps.release.outputs.exists != 'true'
         run: ./gradlew testDebugUnitTest
 
       - name: Build release APK
-        if: steps.release.outputs.exists != 'true'
         run: ./gradlew assembleRelease -x test
 
       - name: Name the artifact
-        if: steps.release.outputs.exists != 'true'
         run: cp app/build/outputs/apk/release/app-release.apk "${{ steps.release.outputs.apk }}"
 
       - name: Upload build artifact
-        if: steps.release.outputs.exists != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.release.outputs.apk }}
@@ -87,7 +127,6 @@ jobs:
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: steps.release.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -116,7 +155,7 @@ jobs:
 
           gh release create "${{ steps.release.outputs.tag }}" \
             "${{ steps.release.outputs.apk }}" \
-            --target "$GITHUB_SHA" \
+            --target "${{ steps.release.outputs.target_sha }}" \
             --title "${{ steps.release.outputs.tag }}" \
             --notes-file release-notes.md \
             --generate-notes
