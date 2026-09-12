@@ -149,6 +149,20 @@ class RtspStreamManager(context: Context) {
         val url: String,
         val forceTcp: Boolean,
         val mainStream: Boolean,
+        val credentialSource: RtspCredentialSource,
+    ) {
+        fun route(): RtspAttemptRoute =
+            RtspAttemptRoute(
+                credentialSource = credentialSource,
+                forceTcp = forceTcp,
+                mainStream = mainStream,
+            )
+    }
+
+    private data class CredentialCandidate(
+        val username: String,
+        val password: String,
+        val source: RtspCredentialSource,
     )
 
     private data class SessionParams(
@@ -220,23 +234,15 @@ class RtspStreamManager(context: Context) {
         reconnectAttempt = 0
         session = SessionParams(host, port, username, password, channel, mainStream, preferFactoryRtspAccount)
         _mainStream.value = mainStream
-        val creds = credentialOrder(username, password, preferFactoryRtspAccount)
-        val streamOrder = if (mainStream) listOf(true, false) else listOf(false)
-        attempts = buildList {
-            for (forceTcp in listOf(true, false)) {
-                for (useMain in streamOrder) {
-                    for ((user, pass) in creds) {
-                        add(
-                            Attempt(
-                                url = RtspUrlBuilder.build(host, port, user, pass, channel, useMain),
-                                forceTcp = forceTcp,
-                                mainStream = useMain,
-                            ),
-                        )
-                    }
-                }
-            }
-        }.distinctBy { it.url to it.forceTcp }
+        attempts = buildAttempts(
+            host = host,
+            port = port,
+            username = username,
+            password = password,
+            channel = channel,
+            mainStream = mainStream,
+            preferFactoryRtspAccount = preferFactoryRtspAccount,
+        )
         attemptIndex = 0
         playAttempt(attempts.firstOrNull() ?: return)
     }
@@ -257,17 +263,59 @@ class RtspStreamManager(context: Context) {
         )
     }
 
+    private fun buildAttempts(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        channel: Int,
+        mainStream: Boolean,
+        preferFactoryRtspAccount: Boolean,
+    ): List<Attempt> {
+        val creds = credentialOrder(username, password, preferFactoryRtspAccount)
+        val streamOrder = if (mainStream) listOf(true, false) else listOf(false)
+        return buildList {
+            for (forceTcp in listOf(true, false)) {
+                for (useMain in streamOrder) {
+                    for (credential in creds) {
+                        add(
+                            Attempt(
+                                url = RtspUrlBuilder.build(
+                                    host,
+                                    port,
+                                    credential.username,
+                                    credential.password,
+                                    channel,
+                                    useMain,
+                                ),
+                                forceTcp = forceTcp,
+                                mainStream = useMain,
+                                credentialSource = credential.source,
+                            ),
+                        )
+                    }
+                }
+            }
+        }.distinctBy { it.url to it.forceTcp }
+    }
+
     private fun credentialOrder(
         username: String,
         password: String,
         preferFactory: Boolean,
-    ): List<Pair<String, String>> {
-        val user = username to password
-        val factory = RtspUrlBuilder.FALLBACK_USERNAME to RtspUrlBuilder.FALLBACK_PASSWORD
-        return when {
-            preferFactory || username.isBlank() -> listOf(factory, user).distinct()
-            else -> listOf(user, factory).distinct()
+    ): List<CredentialCandidate> {
+        val configured = CredentialCandidate(username, password, RtspCredentialSource.CONFIGURED)
+        val factory = CredentialCandidate(
+            RtspUrlBuilder.FALLBACK_USERNAME,
+            RtspUrlBuilder.FALLBACK_PASSWORD,
+            RtspCredentialSource.FACTORY,
+        )
+        val ordered = if (preferFactory || username.isBlank()) {
+            listOf(factory, configured)
+        } else {
+            listOf(configured, factory)
         }
+        return ordered.distinctBy { it.username to it.password }
     }
 
     private fun playAttempt(attempt: Attempt) {
@@ -288,23 +336,23 @@ class RtspStreamManager(context: Context) {
     private fun handlePlaybackError(error: PlaybackException) {
         if (released) return
 
-        if (isDecoderCapabilityError(error)) {
-            val subIdx = attempts.indexOfFirst { !it.mainStream }
-            if (subIdx >= 0 && attemptIndex < subIdx) {
-                attemptIndex = subIdx
-                playAttempt(attempts[subIdx])
-                return
-            }
+        val failureKind = when {
+            isAuthError(error) -> RtspFailureKind.AUTHENTICATION
+            isDecoderCapabilityError(error) -> RtspFailureKind.DECODER
+            else -> RtspFailureKind.OTHER
         }
-
-        val next = attempts.getOrNull(attemptIndex + 1)
-        if (next != null) {
-            attemptIndex++
-            playAttempt(next)
+        val nextIndex = RtspRetryPolicy.nextAttemptIndex(
+            attempts = attempts.map { it.route() },
+            currentIndex = attemptIndex,
+            failureKind = failureKind,
+        )
+        if (nextIndex != null) {
+            attemptIndex = nextIndex
+            playAttempt(attempts[nextIndex])
             return
         }
 
-        if (isAuthError(error)) {
+        if (failureKind == RtspFailureKind.AUTHENTICATION) {
             _state.value = RtspPlayerState.AuthenticationFailed(friendlyError(error))
             return
         }
@@ -331,23 +379,15 @@ class RtspStreamManager(context: Context) {
             if (released) return@Runnable
             reconnectAttempt = nextAttempt
             _state.value = RtspPlayerState.Reconnecting
-            val creds = credentialOrder(s.username, s.password, s.preferFactoryRtspAccount)
-            val streamOrder = if (s.mainStream) listOf(true, false) else listOf(false)
-            attempts = buildList {
-                for (forceTcp in listOf(true, false)) {
-                    for (useMain in streamOrder) {
-                        for ((user, pass) in creds) {
-                            add(
-                                Attempt(
-                                    url = RtspUrlBuilder.build(s.host, s.port, user, pass, s.channel, useMain),
-                                    forceTcp = forceTcp,
-                                    mainStream = useMain,
-                                ),
-                            )
-                        }
-                    }
-                }
-            }.distinctBy { it.url to it.forceTcp }
+            attempts = buildAttempts(
+                host = s.host,
+                port = s.port,
+                username = s.username,
+                password = s.password,
+                channel = s.channel,
+                mainStream = s.mainStream,
+                preferFactoryRtspAccount = s.preferFactoryRtspAccount,
+            )
             attemptIndex = 0
             playAttempt(attempts.firstOrNull() ?: return@Runnable)
         }
@@ -400,7 +440,7 @@ class RtspStreamManager(context: Context) {
             t = t.cause
             depth++
         }
-        return error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
+        return false
     }
 
     private fun isDecoderCapabilityError(error: PlaybackException): Boolean {
