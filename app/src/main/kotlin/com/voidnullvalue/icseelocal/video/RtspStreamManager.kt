@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -87,6 +88,11 @@ class RtspStreamManager(context: Context) {
 
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
+            diag(
+                "player-state playbackState=${playbackStateName(playbackState)} " +
+                    "playWhenReady=${exoPlayer.playWhenReady} isPlaying=${exoPlayer.isPlaying} " +
+                    "attempt=${attemptIndex + 1}/${attempts.size} reconnect=$reconnectAttempt",
+            )
             when (playbackState) {
                 Player.STATE_READY -> {
                     reconnectAttempt = 0
@@ -109,10 +115,15 @@ class RtspStreamManager(context: Context) {
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            diagError("player-error", error)
             handlePlaybackError(error)
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            diag(
+                "is-playing changed=$isPlaying playbackState=${playbackStateName(exoPlayer.playbackState)} " +
+                    "playWhenReady=${exoPlayer.playWhenReady}",
+            )
             if (isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
                 reconnectAttempt = 0
                 _state.value = RtspPlayerState.Live
@@ -140,7 +151,13 @@ class RtspStreamManager(context: Context) {
                     totalBytesLoaded: Long,
                     bitrateEstimate: Long,
                 ) {
-                    if (bitrateEstimate > 0) _bitrateBps.value = bitrateEstimate
+                    if (bitrateEstimate > 0) {
+                        _bitrateBps.value = bitrateEstimate
+                        diag(
+                            "bandwidth bitrate=$bitrateEstimate totalBytes=$totalBytesLoaded " +
+                                "loadTimeMs=$totalLoadTimeMs",
+                        )
+                    }
                 }
             })
         }
@@ -229,7 +246,15 @@ class RtspStreamManager(context: Context) {
         mainStream: Boolean = true,
         preferFactoryRtspAccount: Boolean = false,
     ) {
-        if (released) return
+        if (released) {
+            diag("start ignored: manager already released")
+            return
+        }
+        diag(
+            "start host=$host port=$port channel=$channel stream=${if (mainStream) "main/FHD" else "sub/HD"} " +
+                "username=${redactValue(username)} passwordLength=${password.length} " +
+                "preferFactory=$preferFactoryRtspAccount",
+        )
         cancelReconnect()
         reconnectAttempt = 0
         session = SessionParams(host, port, username, password, channel, mainStream, preferFactoryRtspAccount)
@@ -244,6 +269,10 @@ class RtspStreamManager(context: Context) {
             preferFactoryRtspAccount = preferFactoryRtspAccount,
         )
         attemptIndex = 0
+        diag("attempt-plan count=${attempts.size}")
+        attempts.forEachIndexed { index, attempt ->
+            diag("attempt-plan #${index + 1} ${describeAttempt(attempt)}")
+        }
         playAttempt(attempts.firstOrNull() ?: return)
     }
 
@@ -319,11 +348,18 @@ class RtspStreamManager(context: Context) {
     }
 
     private fun playAttempt(attempt: Attempt) {
-        if (released) return
+        if (released) {
+            diag("play-attempt ignored: manager already released")
+            return
+        }
+        diag("play-attempt #${attemptIndex + 1}/${attempts.size} ${describeAttempt(attempt)}")
         if (_state.value !is RtspPlayerState.Reconnecting) {
             _state.value = RtspPlayerState.Connecting
         }
         val mediaSource = RtspMediaSource.Factory()
+            // Diagnostic branch only. Media3 logs the raw RTSP request/response exchange.
+            // Do not publish raw logcat without removing credentials from vendor RTSP URLs.
+            .setDebugLoggingEnabled(true)
             .setForceUseRtpTcp(attempt.forceTcp)
             .setTimeoutMs(TCP_FALLBACK_TIMEOUT_MS)
             .createMediaSource(MediaItem.fromUri(Uri.parse(attempt.url)))
@@ -341,19 +377,29 @@ class RtspStreamManager(context: Context) {
             isDecoderCapabilityError(error) -> RtspFailureKind.DECODER
             else -> RtspFailureKind.OTHER
         }
+        diag(
+            "failure-classified kind=$failureKind errorCode=${error.errorCode} " +
+                "errorCodeName=${error.errorCodeName} current=${attempts.getOrNull(attemptIndex)?.let(::describeAttempt)}",
+        )
         val nextIndex = RtspRetryPolicy.nextAttemptIndex(
             attempts = attempts.map { it.route() },
             currentIndex = attemptIndex,
             failureKind = failureKind,
         )
         if (nextIndex != null) {
+            diag(
+                "retry-policy current=#${attemptIndex + 1} next=#${nextIndex + 1} " +
+                    "nextAttempt=${describeAttempt(attempts[nextIndex])}",
+            )
             attemptIndex = nextIndex
             playAttempt(attempts[nextIndex])
             return
         }
 
         if (failureKind == RtspFailureKind.AUTHENTICATION) {
-            _state.value = RtspPlayerState.AuthenticationFailed(friendlyError(error))
+            val message = friendlyError(error)
+            diag("terminal-auth-failure message=$message")
+            _state.value = RtspPlayerState.AuthenticationFailed(message)
             return
         }
 
@@ -361,6 +407,10 @@ class RtspStreamManager(context: Context) {
     }
 
     private fun scheduleReconnect(lastError: String) {
+        diag(
+            "schedule-reconnect requested reconnectAttempt=$reconnectAttempt " +
+                "sessionPresent=${session != null} released=$released lastError=$lastError",
+        )
         if (session == null || released) {
             _state.value = RtspPlayerState.Offline(lastError)
             return
@@ -372,12 +422,14 @@ class RtspStreamManager(context: Context) {
         _state.value = RtspPlayerState.Reconnecting
         val delayMs = reconnectDelayMs(reconnectAttempt)
         val nextAttempt = reconnectAttempt + 1
+        diag("schedule-reconnect next=$nextAttempt delayMs=$delayMs")
         cancelReconnect()
         val runnable = Runnable {
             reconnectRunnable = null
             val s = session ?: return@Runnable
             if (released) return@Runnable
             reconnectAttempt = nextAttempt
+            diag("reconnect-fire attempt=$reconnectAttempt")
             _state.value = RtspPlayerState.Reconnecting
             attempts = buildAttempts(
                 host = s.host,
@@ -402,11 +454,13 @@ class RtspStreamManager(context: Context) {
     }
 
     private fun cancelReconnect() {
+        if (reconnectRunnable != null) diag("cancel-reconnect pending=true")
         reconnectRunnable?.let { mainHandler.removeCallbacks(it) }
         reconnectRunnable = null
     }
 
     fun stop() {
+        diag("stop")
         cancelReconnect()
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
@@ -417,6 +471,7 @@ class RtspStreamManager(context: Context) {
     }
 
     fun release() {
+        diag("release")
         released = true
         cancelReconnect()
         session = null
@@ -465,6 +520,54 @@ class RtspStreamManager(context: Context) {
         return false
     }
 
+    private fun diag(message: String) {
+        Log.d(DIAG_TAG, RtspUrlRedactor.redact(message))
+    }
+
+    private fun diagError(prefix: String, error: PlaybackException) {
+        val chain = buildString {
+            var current: Throwable? = error
+            var depth = 0
+            while (current != null && depth < 12) {
+                if (depth > 0) append(" <- ")
+                append(current::class.java.name)
+                val message = current.message?.trim().orEmpty()
+                if (message.isNotEmpty()) append(": ").append(message)
+                current = current.cause
+                depth++
+            }
+        }
+        Log.e(
+            DIAG_TAG,
+            RtspUrlRedactor.redact(
+                "$prefix errorCode=${error.errorCode} errorCodeName=${error.errorCodeName} " +
+                    "attempt=#${attemptIndex + 1}/${attempts.size} chain=$chain",
+            ),
+            error,
+        )
+    }
+
+    private fun describeAttempt(attempt: Attempt): String =
+        "credentials=${attempt.credentialSource} transport=${if (attempt.forceTcp) "TCP" else "UDP"} " +
+            "stream=${if (attempt.mainStream) "main/FHD" else "sub/HD"} " +
+            "url=${RtspUrlRedactor.redact(attempt.url)}"
+
+    private fun redactValue(value: String): String =
+        when {
+            value.isBlank() -> "<blank>"
+            value.length == 1 -> "*"
+            else -> value.first() + "***" + value.last()
+        }
+
+    private fun playbackStateName(state: Int): String =
+        when (state) {
+            Player.STATE_IDLE -> "IDLE"
+            Player.STATE_BUFFERING -> "BUFFERING"
+            Player.STATE_READY -> "READY"
+            Player.STATE_ENDED -> "ENDED"
+            else -> "UNKNOWN($state)"
+        }
+
     private fun friendlyError(error: PlaybackException): String {
         val parts = ArrayList<String>()
         var t: Throwable? = error
@@ -489,6 +592,7 @@ class RtspStreamManager(context: Context) {
     }
 
     companion object {
+        private const val DIAG_TAG = "ICSeeRTSP"
         private const val TCP_FALLBACK_TIMEOUT_MS = 8_000L
         private const val BASE_BACKOFF_MS = 1_000L
         private const val MAX_BACKOFF_MS = 30_000L
