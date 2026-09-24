@@ -117,14 +117,28 @@ class CameraStore(
         val stored = readStoredList(prefs[listKey]).firstOrNull { it.id == id } ?: return null
         val ivB64 = stored.credentialIvBase64 ?: return null
         val ctB64 = stored.credentialCiphertextBase64 ?: return null
-        val blob = EncryptedBlob(Base64.getDecoder().decode(ivB64), Base64.getDecoder().decode(ctB64))
-        val plaintext = cipher.decrypt(blob)
-        val decoded = json.decodeFromString<StoredCredentials>(String(plaintext))
-        return CameraCredentials(decoded.username, decoded.password)
+        // App data can outlive its Android Keystore key (for example after an
+        // adb reinstall/restore), and malformed legacy data is possible too.
+        // AES-GCM correctly rejects that ciphertext with AEADBadTagException;
+        // treat it as unavailable credentials rather than crashing every screen
+        // that opens the saved camera. Saving the camera again replaces it with
+        // ciphertext made by the current key.
+        return runCatching {
+            val blob = EncryptedBlob(Base64.getDecoder().decode(ivB64), Base64.getDecoder().decode(ctB64))
+            val plaintext = cipher.decrypt(blob)
+            val decoded = json.decodeFromString<StoredCredentials>(String(plaintext))
+            CameraCredentials(decoded.username, decoded.password)
+        }.getOrNull()
     }
 
     private fun readStoredList(raw: String?): List<StoredCamera> {
         if (raw.isNullOrBlank()) return emptyList()
-        return runCatching { json.decodeFromString<List<StoredCamera>>(raw) }.getOrDefault(emptyList())
+        return runCatching { json.decodeFromString<List<StoredCamera>>(raw) }
+            .getOrDefault(emptyList())
+            .deduplicateByIdKeepingNewest()
     }
 }
+
+/** Repairs lists written by older builds that could contain the same camera more than once. */
+internal fun List<StoredCamera>.deduplicateByIdKeepingNewest(): List<StoredCamera> =
+    asReversed().distinctBy { it.id }.asReversed()

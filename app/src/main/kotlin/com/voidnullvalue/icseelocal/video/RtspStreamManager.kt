@@ -14,6 +14,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -71,6 +72,18 @@ class RtspStreamManager(context: Context) {
 
     private val renderersFactory = DefaultRenderersFactory(appContext)
         .setEnableDecoderFallback(true)
+        .setMediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+            // Pixel 6's c2.exynos.hevc.decoder can advertise support for these
+            // camera streams and then fail every graphic-block allocation with
+            // codec error 0xe. Prefer Android's software HEVC implementation;
+            // keep the platform's normal ordering for audio and other formats.
+            val selector = if (mimeType.equals("video/hevc", ignoreCase = true)) {
+                MediaCodecSelector.PREFER_SOFTWARE
+            } else {
+                MediaCodecSelector.DEFAULT
+            }
+            selector.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+        }
 
     /** Low target buffers for live IP cams — reduces glass-to-glass latency.
      *  Constraints: minBufferMs >= bufferForPlaybackMs and
@@ -117,6 +130,13 @@ class RtspStreamManager(context: Context) {
                 reconnectAttempt = 0
                 _state.value = RtspPlayerState.Live
             }
+        }
+
+        override fun onSurfaceSizeChanged(width: Int, height: Int) {
+            if (width <= 0 || height <= 0) return
+            val pending = pendingSurfaceAttempt ?: return
+            pendingSurfaceAttempt = null
+            playAttempt(pending)
         }
     }
 
@@ -167,6 +187,7 @@ class RtspStreamManager(context: Context) {
     private var reconnectAttempt = 0
     private var released = false
     private var reconnectRunnable: Runnable? = null
+    private var pendingSurfaceAttempt: Attempt? = null
 
     fun setMuted(mute: Boolean) {
         _muted.value = mute
@@ -275,10 +296,27 @@ class RtspStreamManager(context: Context) {
         if (_state.value !is RtspPlayerState.Reconnecting) {
             _state.value = RtspPlayerState.Connecting
         }
+        // The ViewModel can discover the RTSP endpoint before Compose has
+        // created PlayerView's output surface. Starting Exynos HEVC against
+        // that transient surface permanently disconnects its BufferQueue
+        // (codec error 0xe), even after the view appears. Wait for Media3's
+        // surface callback instead.
+        if (exoPlayer.surfaceSize.width <= 0 || exoPlayer.surfaceSize.height <= 0) {
+            pendingSurfaceAttempt = attempt
+            return
+        }
+        pendingSurfaceAttempt = null
         val mediaSource = RtspMediaSource.Factory()
             .setForceUseRtpTcp(attempt.forceTcp)
             .setTimeoutMs(TCP_FALLBACK_TIMEOUT_MS)
             .createMediaSource(MediaItem.fromUri(Uri.parse(attempt.url)))
+        // Fully tear down the failed renderer before another URL/transport is
+        // prepared. Replacing a source directly after a codec error can retain a
+        // dying output surface and rapidly exhaust Exynos graphic buffers.
+        if (exoPlayer.mediaItemCount > 0) {
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
+        }
         exoPlayer.setMediaSource(mediaSource)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
@@ -292,9 +330,15 @@ class RtspStreamManager(context: Context) {
             val subIdx = attempts.indexOfFirst { !it.mainStream }
             if (subIdx >= 0 && attemptIndex < subIdx) {
                 attemptIndex = subIdx
+                _mainStream.value = false
                 playAttempt(attempts[subIdx])
                 return
             }
+            // A decoder/surface failure is local to the phone. Trying every
+            // credential and UDP/TCP combination cannot repair it and can create
+            // overlapping codec teardown/allocation on affected Pixels.
+            _state.value = RtspPlayerState.Error(friendlyError(error))
+            return
         }
 
         val next = attempts.getOrNull(attemptIndex + 1)
@@ -368,6 +412,7 @@ class RtspStreamManager(context: Context) {
 
     fun stop() {
         cancelReconnect()
+        pendingSurfaceAttempt = null
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
         attempts = emptyList()
@@ -379,6 +424,7 @@ class RtspStreamManager(context: Context) {
     fun release() {
         released = true
         cancelReconnect()
+        pendingSurfaceAttempt = null
         session = null
         exoPlayer.removeListener(playerListener)
         exoPlayer.release()
@@ -405,6 +451,7 @@ class RtspStreamManager(context: Context) {
 
     private fun isDecoderCapabilityError(error: PlaybackException): Boolean {
         if (error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
             error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
         ) {
             return true
@@ -415,6 +462,9 @@ class RtspStreamManager(context: Context) {
             val m = t.message.orEmpty()
             if (m.contains("NO_EXCEEDS_CAPABILITIES", ignoreCase = true) ||
                 m.contains("Decoder init failed", ignoreCase = true) ||
+                m.contains("MediaCodecVideoDecoderException", ignoreCase = true) ||
+                m.contains("Decoder failed", ignoreCase = true) ||
+                m.contains("Error 0xe", ignoreCase = true) ||
                 m.contains("EXCEEDS_CAPABILITIES", ignoreCase = true)
             ) {
                 return true

@@ -145,8 +145,6 @@ class CameraSessionManager(
             // to distinguish the two phases yet, so Authenticating covers the whole call.
             transition(ConnectionState.Authenticating)
             val session = loginNegotiator.negotiate(t, credentials)
-            transition(ConnectionState.Authenticated(session.sessionId, session.aliveIntervalSeconds))
-
             val channel = DvripCommandChannel(t, session.sessionId, session.crypto)
             commandChannel = channel
             keepalive = KeepaliveTask(
@@ -158,6 +156,11 @@ class CameraSessionManager(
                 // class doc on why auto-reconnect was removed.
                 onFailure = { onConnectionLost("keepalive failed: ${it.message}") },
             ).also { it.start(scope) }
+            // Authenticated is an externally-observable StateFlow value. Publish
+            // it only after the resources its contract promises are initialized;
+            // collectors otherwise race this coroutine and can observe null
+            // controlTransport/commandChannel values.
+            transition(ConnectionState.Authenticated(session.sessionId, session.aliveIntervalSeconds))
         } catch (e: Exception) {
             t.close()
             transport = null
