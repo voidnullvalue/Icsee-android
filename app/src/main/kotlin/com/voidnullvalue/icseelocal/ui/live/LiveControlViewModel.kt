@@ -715,9 +715,6 @@ class LiveControlViewModel(application: Application) : AndroidViewModel(applicat
     // --- PTZ ---
     fun onPtzDown(command: PtzCommand) {
         ptzController?.onPointerDown(command, _speedStep.value)
-        if (konamiDetector.onInput(command)) {
-            _danceModeTriggered.value = true
-        }
     }
     fun onPtzUp() = ptzController?.onPointerUp()
     fun onPtzCancel() = ptzController?.onPointerCancel()
