@@ -173,6 +173,8 @@ No iCSee/XMEye/JFTech cloud SDK, no Firebase, no analytics/ads SDKs, no
 Flutter/React Native/WebView wrapper, no custom crypto primitives, and no
 hardcoded credentials.
 
+Earlier versions had an easter egg, the Konami code on PTZ would connect to archive.org to play "funkytown" over the speaker and make the camera "dance" to it. The trigger has been removed. As this project is now being actively used by others, I no longer felt the code was appropriate. 
+
 ## License
 
 [MIT](LICENSE) © 2026 |VOID|
